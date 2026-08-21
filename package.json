@@ -1,0 +1,33 @@
+{
+  "name": "block-chain-finder",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env NODE_USE_ENV_PROXY=1 vite",
+    "dev:mock": "cross-env OKLINK_MOCK=1 vite",
+    "build": "tsc -b && vite build",
+    "preview": "cross-env NODE_USE_ENV_PROXY=1 vite preview"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.6.1",
+    "@tanstack/react-query": "^5.66.0",
+    "@xyflow/react": "^12.4.4",
+    "antd": "^5.24.0",
+    "dayjs": "^1.11.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "cross-env": "^7.0.3",
+    "https-proxy-agent": "^9.1.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}
