@@ -7,29 +7,15 @@ import { fetchAddressAsset } from '../api/oklink/endpoints';
 import { fetchAddressEntityLabel } from '../api/oklink/entity';
 import { getChain } from '../api/oklink/chains';
 import { copyText, formatAmount, formatTime, formatUsd } from '../utils/format';
+import { exchangeTagColor } from '../utils/exchangeTag';
 import { useTraceEngine } from '../trace/useTraceEngine';
 import TxTable from '../components/TxTable';
 import TokenHoldingsTable from '../components/TokenHoldingsTable';
+import ExchangeHuntPanel from '../components/ExchangeHuntPanel';
 import FlowGraph from '../components/graph/FlowGraph';
 import { App } from 'antd';
 
 const { Text } = Typography;
-
-/** 按交易所名称给标签配色，便于一眼区分 Gate / OKX / Binance 等 */
-function exchangeTagColor(label: string): string {
-  const l = label.toLowerCase();
-  if (l.includes('binance') || l.includes('bnb')) return 'gold';
-  if (l.includes('okx') || l.includes('okb')) return 'black';
-  if (l.includes('gate')) return 'volcano';
-  if (l.includes('bybit')) return 'purple';
-  if (l.includes('bitget')) return 'cyan';
-  if (l.includes('upbit')) return 'blue';
-  if (l.includes('bithumb')) return 'red';
-  if (l.includes('kucoin') || l.includes('kucoin')) return 'green';
-  if (l.includes('mexc')) return 'magenta';
-  if (l.includes('huobi') || l.includes('htx')) return 'orange';
-  return 'geekblue';
-}
 
 export default function AddressPage() {
   const { chain = 'ETH', address = '' } = useParams();
@@ -119,6 +105,7 @@ export default function AddressPage() {
           defaultActiveKey="trace"
           items={[
             { key: 'trace', label: '资金溯源', children: <FlowGraph chain={chain} address={address} /> },
+            { key: 'hunt', label: '盒武器搜索', children: <ExchangeHuntPanel chain={chain} address={address} /> },
             { key: 'txs', label: '交易记录', children: <TxTable chain={chain} address={address} /> },
             { key: 'tokens', label: '代币持仓', children: <TokenHoldingsTable chain={chain} address={address} /> },
           ]}
