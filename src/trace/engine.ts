@@ -54,13 +54,13 @@ interface QueuedNode {
   depth: number;
 }
 
-interface CounterpartyAgg {
+export interface CounterpartyAgg {
   out: Map<string, EdgeTransfer>;
   in: Map<string, EdgeTransfer>;
 }
 
 /** 代币元信息（来自该节点自身的持仓列表），用于补全符号与 USD 估值 */
-interface TokenMeta {
+export interface TokenMeta {
   symbol: string;
   priceUsd: number | null;
 }
@@ -68,6 +68,24 @@ interface TokenMeta {
 const PAGE_SIZE = 50;
 /** 溯源时抓取的交易类型：普通转账 + ERC20/TRC20 转账（TRON 的两类列表来自 TronScan） */
 const TRACE_PROTOCOLS: TxProtocolType[] = ['transaction', 'token_20'];
+
+/** 拉取地址的代币持仓首页，构建合约地址 -> 符号/价格 映射；失败返回空表不阻断调用方 */
+export async function fetchTokenMetaMap(chain: string, address: string, limit = PAGE_SIZE): Promise<Map<string, TokenMeta>> {
+  const meta = new Map<string, TokenMeta>();
+  try {
+    const res = await fetchTokenBalances(chain, address, 1, limit);
+    for (const h of res.list) {
+      if (!h.tokenContractAddress) continue;
+      meta.set(h.tokenContractAddress.toLowerCase(), {
+        symbol: h.symbol || h.token || 'UNKNOWN',
+        priceUsd: Number(h.priceUsd),
+      });
+    }
+  } catch {
+    // 价格缺失只影响 USD 过滤与估值，不中断
+  }
+  return meta;
+}
 
 /**
  * 资金溯源引擎：从种子地址出发 BFS 展开交易对手方，构建资金流向图。
@@ -239,20 +257,7 @@ export class TraceEngine {
 
   /** 拉取第一页代币持仓，构建合约地址到符号/价格的映射；失败不阻断溯源 */
   private async loadTokenMeta(chain: string, address: string): Promise<Map<string, TokenMeta>> {
-    const meta = new Map<string, TokenMeta>();
-    try {
-      const res = await fetchTokenBalances(chain, address, 1, PAGE_SIZE);
-      for (const h of res.list) {
-        if (!h.tokenContractAddress) continue;
-        meta.set(h.tokenContractAddress.toLowerCase(), {
-          symbol: h.symbol || h.token || 'UNKNOWN',
-          priceUsd: Number(h.priceUsd),
-        });
-      }
-    } catch {
-      // 价格缺失只影响 USD 过滤与估值，不中断
-    }
-    return meta;
+    return fetchTokenMetaMap(chain, address, PAGE_SIZE);
   }
 
   private addNode(address: string, depth: number): AddressNode {
@@ -295,7 +300,7 @@ export class TraceEngine {
 }
 
 /** 把一笔笔交易聚合成「对手方 -> 方向 -> 代币转账」结构 */
-function aggregateCounterparties(
+export function aggregateCounterparties(
   txs: TxItem[],
   self: string,
   direction: TraceDirection,
