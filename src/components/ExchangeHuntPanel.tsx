@@ -186,13 +186,17 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
           <Select
             mode="tags"
             style={{ minWidth: 220 }}
-            placeholder="不选 = 追踪全部币种"
+            placeholder="输入符号后回车，可连续添加多个"
             value={tokenFilter}
             onChange={(v) => setTokenFilter(v.map((s) => s.trim().toUpperCase()).filter(Boolean))}
-            options={(chainInfo?.commonTokens ?? []).map((t) => ({ value: t, label: t }))}
+            options={(chainInfo?.commonTokens ?? [])
+              .filter((t) => !tokenFilter.includes(t))
+              .map((t) => ({ value: t, label: t }))}
             tokenSeparators={[',', ' ']}
             disabled={snapshot.running}
             maxTagCount={4}
+            suffixIcon={null}
+            open={undefined}
           />
         </Space>
 
