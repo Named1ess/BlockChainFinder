@@ -13,6 +13,8 @@ export interface ChainInfo {
   explorerBase: string;
   /** 地址正则（用于搜索框识别输入类型） */
   addressPattern: RegExp;
+  /** 该链常见币种符号（盒武器搜索的币种过滤建议项） */
+  commonTokens: string[];
 }
 
 export const CHAINS: ChainInfo[] = [
@@ -25,6 +27,7 @@ export const CHAINS: ChainInfo[] = [
     nativeSymbol: 'ETH',
     explorerBase: 'https://www.oklink.com/eth',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
+    commonTokens: ['ETH', 'USDT', 'USDC', 'WBTC', 'DAI'],
   },
   {
     key: 'BSC',
@@ -35,6 +38,7 @@ export const CHAINS: ChainInfo[] = [
     nativeSymbol: 'BNB',
     explorerBase: 'https://www.oklink.com/bsc',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
+    commonTokens: ['BNB', 'USDT', 'USDC', 'CAKE'],
   },
   {
     key: 'POLYGON',
@@ -45,6 +49,7 @@ export const CHAINS: ChainInfo[] = [
     nativeSymbol: 'POL',
     explorerBase: 'https://www.oklink.com/polygon',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
+    commonTokens: ['POL', 'MATIC', 'USDT', 'USDC'],
   },
   {
     key: 'TRON',
@@ -55,6 +60,7 @@ export const CHAINS: ChainInfo[] = [
     nativeSymbol: 'TRX',
     explorerBase: 'https://www.oklink.com/trx',
     addressPattern: /^T[1-9A-HJ-NP-Za-km-z]{33}$/,
+    commonTokens: ['TRX', 'USDT', 'USDC'],
   },
 ];
 

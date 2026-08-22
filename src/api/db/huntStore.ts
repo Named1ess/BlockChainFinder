@@ -20,6 +20,8 @@ export interface HuntRunRow {
   maxWallets: number;
   maxNeighbors: number;
   hitLimit: number;
+  /** 币种过滤（空数组 = 不过滤） */
+  tokenFilter: string[] | null;
   scanned: number;
   tagChecked: number;
   depth: number;

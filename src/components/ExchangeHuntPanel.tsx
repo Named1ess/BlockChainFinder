@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, InputNumber, Select, Space, Table, Tag, Typography } from 'antd';
@@ -8,6 +8,7 @@ import { DEFAULT_HUNT_OPTIONS } from '../trace/exchangeHunt';
 import { useExchangeHunt } from '../trace/useExchangeHunt';
 import { exchangeTagColor } from '../utils/exchangeTag';
 import { shortAddress } from '../utils/format';
+import { getChain } from '../api/oklink/chains';
 import {
   deleteHuntRunData,
   getHuntRun,
@@ -46,9 +47,25 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
   const [maxWallets, setMaxWallets] = useState(DEFAULT_HUNT_OPTIONS.maxWallets);
   const [maxNeighbors, setMaxNeighbors] = useState(DEFAULT_HUNT_OPTIONS.maxNeighbors);
   const [hitLimit, setHitLimit] = useState(DEFAULT_HUNT_OPTIONS.hitLimit);
+  const [tokenFilter, setTokenFilter] = useState<string[]>([]);
   /** 正在查看的历史 run；null = 当前运行 */
   const [viewRunId, setContentViewRunId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+
+  // 切链后清空币种过滤（不同链的币种体系不同）
+  useEffect(() => {
+    setTokenFilter([]);
+    setPage(0);
+  }, [chain]);
+
+  const chainInfo = getChain(chain);
+
+  const handleStart = () => {
+    engine.reset();
+    setContentViewRunId(null);
+    setPage(0);
+    void engine.start(chain, address, { maxWallets, maxNeighbors, hitLimit, tokenFilter });
+  };
 
   const activeRunId = viewRunId ?? snapshot.runId;
 
@@ -80,13 +97,6 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
     placeholderData: (prev) => prev,
     staleTime: 200,
   });
-
-  const handleStart = () => {
-    engine.reset();
-    setContentViewRunId(null);
-    setPage(0);
-    void engine.start(chain, address, { maxWallets, maxNeighbors, hitLimit });
-  };
 
   const rows: HuntWalletRow[] = hitsQuery.data?.rows ?? [];
   const total = hitsQuery.data?.total ?? 0;
@@ -171,6 +181,20 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
           <InputNumber min={0} max={500} value={hitLimit} onChange={(v) => setHitLimit(v ?? 0)} disabled={snapshot.running} />
           <Text type="secondary" style={{ fontSize: 12 }}>个（0 = 不限）</Text>
         </Space>
+        <Space size={6}>
+          <Text type="secondary">币种过滤</Text>
+          <Select
+            mode="tags"
+            style={{ minWidth: 220 }}
+            placeholder="不选 = 追踪全部币种"
+            value={tokenFilter}
+            onChange={(v) => setTokenFilter(v.map((s) => s.trim().toUpperCase()).filter(Boolean))}
+            options={(chainInfo?.commonTokens ?? []).map((t) => ({ value: t, label: t }))}
+            tokenSeparators={[',', ' ']}
+            disabled={snapshot.running}
+            maxTagCount={4}
+          />
+        </Space>
 
         {snapshot.running ? (
           <Button danger icon={<ScissorOutlined />} onClick={() => engine.stop()}>
@@ -252,6 +276,8 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
           message={`正在第 ${snapshot.depth} 跳扫描中：已展开 ${snapshot.scanned} 个钱包、检查 ${snapshot.tagChecked} 个标签，命中 ${
             snapshot.hitCount
           }${hitLimit > 0 ? ` / 目标 ${hitLimit}` : ''}${
+            tokenFilter.length > 0 ? ` · 仅追踪 ${tokenFilter.join('/')}` : ''
+          }${
             snapshot.hitCount > 0
               ? `（本层查完后${hitLimit > 0 && snapshot.hitCount >= hitLimit ? '停止' : '继续更深'}）`
               : ''

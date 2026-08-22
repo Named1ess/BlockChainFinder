@@ -70,12 +70,18 @@ export interface HuntOptions {
    * 未达标时即使某层有命中也会继续向更深挖掘。0 = 不限（首个含命中的层挖完即停）。
    */
   hitLimit: number;
+  /**
+   * 币种过滤：只统计这些符号（大小写不敏感）的转账来发现对手方。
+   * 空数组 = 不过滤（追踪全部币种）。
+   */
+  tokenFilter: string[];
 }
 
 export const DEFAULT_HUNT_OPTIONS: HuntOptions = {
   maxWallets: 120,
   maxNeighbors: 10,
   hitLimit: 10,
+  tokenFilter: [],
 };
 
 /** 标签检查的并发度（SSR 页面抓取不走 OKLink API 限流队列） */
@@ -199,6 +205,7 @@ export class ExchangeHuntEngine {
       maxWallets: this.lastOpts?.maxWallets ?? 0,
       maxNeighbors: this.lastOpts?.maxNeighbors ?? 0,
       hitLimit: this.lastOpts?.hitLimit ?? 0,
+      tokenFilter: this.lastOpts?.tokenFilter ?? [],
       scanned: this.scanned,
       tagChecked: this.tagChecked,
       depth: this.depth,
@@ -354,8 +361,15 @@ export class ExchangeHuntEngine {
       });
     }
 
+    // 币种过滤：只保留用户选定符号的转账（空 = 不过滤）
+    const wanted = new Set(opts.tokenFilter.map((s) => s.trim().toUpperCase()).filter(Boolean));
+    const pool = wanted.size > 0 ? txs.filter((t) => {
+      const sym = (t.transactionSymbol ?? '').trim().toUpperCase();
+      return sym !== '' && wanted.has(sym);
+    }) : txs;
+
     const tokenMeta = await fetchTokenMetaMap(chain, address);
-    const agg = aggregateCounterparties(txs, address, 'both', tokenMeta);
+    const agg = aggregateCounterparties(pool, address, 'both', tokenMeta);
 
     const ranked = [...agg.entries()]
       .map(([cp, data]) => ({
