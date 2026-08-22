@@ -126,6 +126,82 @@ export const tronAccountInfoSchema = z
   .passthrough();
 
 /* ------------------------------------------------------------------ */
+/* TronScan 页面端接口（apilist.tronscanapi.com，无需 Key）              */
+/* ------------------------------------------------------------------ */
+
+/** 普通转账（/api/transaction） */
+export const tronscanTxSchema = z
+  .object({
+    hash: strField,
+    block: numLike,
+    /** 毫秒时间戳 */
+    timestamp: numLike,
+    ownerAddress: strField,
+    toAddress: strField,
+    contractType: z
+      .union([z.string(), z.number()])
+      .transform((v) => Number(v))
+      .catch(0),
+    confirmed: z.boolean().nullish().catch(undefined),
+    revert: z.boolean().nullish().catch(undefined),
+    fee: numLike,
+    contractData: z
+      .object({
+        /** 原生币数量，单位 SUN（1e6 SUN = 1 TRX）；TRC10 转账时为资产数量 */
+        amount: numLike,
+        /** 存在时表示 TRC10 资产转账 */
+        asset_name: strField,
+      })
+      .passthrough()
+      .nullish()
+      .catch(undefined),
+  })
+  .passthrough();
+
+export const tronscanTxListSchema = z
+  .object({
+    total: numLike,
+    rangeTotal: numLike,
+    data: z.array(z.record(z.unknown())).nullish().catch(undefined),
+  })
+  .passthrough();
+
+/** TRC20 转账（/api/token_trc20/transfers） */
+export const tronscanTrc20Schema = z
+  .object({
+    transaction_id: strField,
+    block_ts: numLike,
+    block: numLike,
+    from_address: strField,
+    to_address: strField,
+    /** 原始整数数量（未除精度） */
+    quant: numLike,
+    contractRet: strField,
+    contract_address: strField,
+    tokenInfo: z
+      .object({
+        tokenAbbr: strField,
+        tokenName: strField,
+        tokenDecimal: z
+          .union([z.string(), z.number()])
+          .transform((v) => Number(v))
+          .catch(0),
+      })
+      .passthrough()
+      .nullish()
+      .catch(undefined),
+  })
+  .passthrough();
+
+export const tronscanTrc20ListSchema = z
+  .object({
+    total: numLike,
+    rangeTotal: numLike,
+    token_transfers: z.array(z.record(z.unknown())).nullish().catch(undefined),
+  })
+  .passthrough();
+
+/* ------------------------------------------------------------------ */
 /* 应用内部类型（与旧版保持一致，供 UI / trace engine 直接消费）        */
 /* ------------------------------------------------------------------ */
 

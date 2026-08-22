@@ -3,6 +3,8 @@ export interface ChainInfo {
   key: string;
   /** 网页端接口路径中的链 slug（小写） */
   apiSlug: string;
+  /** OKLink 站点页面 URL 中的链路径（SSR 实体标签抓取用） */
+  siteSlug: string;
   /** 链家族：evm 走 EVM 端点族，tron 走波场专用端点族 */
   kind: 'evm' | 'tron';
   name: string;
@@ -17,6 +19,7 @@ export const CHAINS: ChainInfo[] = [
   {
     key: 'ETH',
     apiSlug: 'eth',
+    siteSlug: 'ethereum',
     kind: 'evm',
     name: 'Ethereum',
     nativeSymbol: 'ETH',
@@ -26,6 +29,7 @@ export const CHAINS: ChainInfo[] = [
   {
     key: 'BSC',
     apiSlug: 'bsc',
+    siteSlug: 'bsc',
     kind: 'evm',
     name: 'BNB Chain',
     nativeSymbol: 'BNB',
@@ -35,6 +39,7 @@ export const CHAINS: ChainInfo[] = [
   {
     key: 'POLYGON',
     apiSlug: 'polygon',
+    siteSlug: 'polygon',
     kind: 'evm',
     name: 'Polygon',
     nativeSymbol: 'POL',
@@ -44,6 +49,7 @@ export const CHAINS: ChainInfo[] = [
   {
     key: 'TRON',
     apiSlug: 'tron',
+    siteSlug: 'tron',
     kind: 'tron',
     name: 'Tron',
     nativeSymbol: 'TRX',

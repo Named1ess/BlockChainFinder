@@ -21,7 +21,7 @@ function AppLayout() {
         <Outlet />
       </Content>
       <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
-        数据来源：OKLink 网页端数据接口 · 本工具仅供研究学习使用
+        数据来源：OKLink / TronScan 页面端数据接口 · 本工具仅供研究学习使用
       </Footer>
     </Layout>
   );

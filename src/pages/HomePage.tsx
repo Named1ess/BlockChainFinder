@@ -25,7 +25,7 @@ const FEATURES = [
   {
     icon: <SendOutlined />,
     title: '多链支持',
-    desc: '基于 OKLink 网页端数据接口，支持 Ethereum、BNB Chain、Polygon、Tron 等主流公链。',
+    desc: 'Ethereum / BNB Chain / Polygon 走 OKLink 页面端接口，Tron 转账列表走波场官方浏览器 TronScan，均无需 Key。',
   },
 ];
 

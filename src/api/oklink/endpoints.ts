@@ -1,4 +1,4 @@
-import { pageApiFetch, UnsupportedEndpointError } from './client';
+import { pageApiFetch, tronscanFetch } from './client';
 import {
   assetHitSchema,
   classfyTxSchema,
@@ -7,6 +7,10 @@ import {
   transferHitSchema,
   tronAccountInfoSchema,
   tronHolderSchema,
+  tronscanTrc20ListSchema,
+  tronscanTrc20Schema,
+  tronscanTxListSchema,
+  tronscanTxSchema,
   type AddressAsset,
   type TokenHolding,
   type TxItem,
@@ -154,12 +158,15 @@ export async function fetchTokenBalances(
 /** 交易类型（对应 UI 的三个标签页） */
 export type TxProtocolType = 'transaction' | 'token_20' | 'internal';
 
-/** 该链在网页端接口下是否支持指定交易类型（TRON 的普通/代币转账列表受签名网关保护） */
-export function txListSupported(chain: string, protocolType: TxProtocolType): boolean {
+/**
+ * 该链在当前数据源下是否支持指定交易类型。
+ * TRON 的普通/代币转账列表来自 TronScan（波场官方浏览器页面端接口，无需 Key），
+ * 因为 OKLink 网页端已对未登录流量关闭这两类列表（官方页面同样显示为空）。
+ */
+export function txListSupported(chain: string, _protocolType: TxProtocolType): boolean {
   const info = getChain(chain);
   if (!info) return false;
-  if (info.kind === 'evm') return true;
-  return protocolType === 'internal';
+  return true;
 }
 
 export interface TxListResult {
@@ -167,8 +174,16 @@ export interface TxListResult {
   totalPage: number;
 }
 
-const tronUnsupportedMessage =
-  'OKLink 网页端对 Tron 的转账列表启用了额外签名校验，暂时无法直接抓取。可切换「内部调用」查看，或改用 Ethereum / BNB Chain / Polygon 地址。';
+const SUN_PER_TRX = 1e6;
+
+/** TronScan 分页总页数：优先 rangeTotal（真实总数），total 可能被截断为 10000 */
+function tronscanTotalPage(rangeTotal: string | number | undefined, total: string | number | undefined, limit: number, page: number, hits: number): number {
+  for (const candidate of [rangeTotal, total]) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0 && n !== 10000) return Math.max(1, Math.ceil(n / limit));
+  }
+  return hits >= limit ? page + 1 : Math.max(1, page);
+}
 
 /** 地址交易列表（分页）。protocolType 区分普通转账 / 代币转账 / 内部调用 */
 export async function fetchAddressTransactions(
@@ -182,19 +197,78 @@ export async function fetchAddressTransactions(
   if (!info) return { transactions: [], totalPage: 1 };
   const offset = (page - 1) * limit;
 
-  // ---- 内部调用：EVM 与 TRON 均可用 ----
-  if (protocolType === 'internal') {
-    if (info.kind === 'tron') {
-      const res = hitsEnvelopeSchema.parse(
-        await pageApiFetch<unknown>(`v1/${info.apiSlug}/internalTransactions`, { address, offset, limit }),
+  // ---- TRON：普通/代币转账走 TronScan，内部调用走 OKLink ----
+  if (info.kind === 'tron') {
+    if (protocolType === 'transaction') {
+      const res = tronscanTxListSchema.parse(
+        await tronscanFetch<unknown>('/api/transaction', {
+          sort: '-timestamp',
+          count: 'true',
+          start: offset,
+          limit,
+          address,
+        }),
       );
+      const hits = (res.data ?? []).map((raw) => tronscanTxSchema.parse(raw));
+      const transactions = hits
+        .filter((h) => !h.contractData?.asset_name) // TRC10 资产转账不并入普通转账
+        .map((h) => {
+          const failed = h.revert === true || h.confirmed === false;
+          return {
+            txId: h.hash ?? '',
+            height: h.block,
+            transactionTime: h.timestamp ? String(Math.floor(Number(h.timestamp) / 1000)) : undefined,
+            from: h.ownerAddress ?? '',
+            to: h.toAddress ?? '',
+            amount: h.contractData?.amount ? String(Number(h.contractData.amount) / SUN_PER_TRX) : '0',
+            transactionSymbol: info.nativeSymbol,
+            state: failed ? 'fail' : 'success',
+          } satisfies TxItem;
+        });
       return {
-        transactions: (res.hits ?? []).map(toInternalTx(info.nativeSymbol)),
-        totalPage: ceilTotal(res.total, (res.hits ?? []).length, limit, page),
+        transactions,
+        totalPage: tronscanTotalPage(res.rangeTotal, res.total, limit, page, hits.length),
       };
     }
+
+    if (protocolType === 'token_20') {
+      const res = tronscanTrc20ListSchema.parse(
+        await tronscanFetch<unknown>('/api/token_trc20/transfers', {
+          sort: '-timestamp',
+          count: 'true',
+          start: offset,
+          limit,
+          relatedAddress: address,
+          direction: 2,
+        }),
+      );
+      const hits = (res.token_transfers ?? []).map((raw) => tronscanTrc20Schema.parse(raw));
+      const transactions = hits.map((h) => {
+        const decimals = h.tokenInfo?.tokenDecimal ?? 0;
+        const raw = Number(h.quant);
+        const amount = Number.isFinite(raw) ? raw / 10 ** decimals : 0;
+        const failed = !!h.contractRet && h.contractRet !== 'SUCCESS';
+        return {
+          txId: h.transaction_id ?? '',
+          height: h.block,
+          transactionTime: h.block_ts ? String(Math.floor(Number(h.block_ts) / 1000)) : undefined,
+          from: h.from_address ?? '',
+          to: h.to_address ?? '',
+          amount: String(amount),
+          transactionSymbol: h.tokenInfo?.tokenAbbr ?? 'TRC20',
+          tokenContractAddress: h.contract_address,
+          state: failed ? 'fail' : 'success',
+        } satisfies TxItem;
+      });
+      return {
+        transactions,
+        totalPage: tronscanTotalPage(res.rangeTotal, res.total, limit, page, hits.length),
+      };
+    }
+
+    // internal：OKLink 波场内部交易接口
     const res = hitsEnvelopeSchema.parse(
-      await pageApiFetch<unknown>(`v2/${info.apiSlug}/addresses/${address}/internalTx/condition`, { offset, limit }),
+      await pageApiFetch<unknown>(`v1/${info.apiSlug}/internalTransactions`, { address, offset, limit }),
     );
     return {
       transactions: (res.hits ?? []).map(toInternalTx(info.nativeSymbol)),
@@ -202,9 +276,15 @@ export async function fetchAddressTransactions(
     };
   }
 
-  // ---- 普通转账 / 代币转账：仅 EVM 可用 ----
-  if (info.kind === 'tron') {
-    throw new UnsupportedEndpointError(tronUnsupportedMessage);
+  // ---- EVM：全部走 OKLink 页面端接口 ----
+  if (protocolType === 'internal') {
+    const res = hitsEnvelopeSchema.parse(
+      await pageApiFetch<unknown>(`v2/${info.apiSlug}/addresses/${address}/internalTx/condition`, { offset, limit }),
+    );
+    return {
+      transactions: (res.hits ?? []).map(toInternalTx(info.nativeSymbol)),
+      totalPage: ceilTotal(res.total, (res.hits ?? []).length, limit, page),
+    };
   }
 
   if (protocolType === 'transaction') {

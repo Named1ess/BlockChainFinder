@@ -151,7 +151,7 @@ export default function TxTable({ chain, address }: Props) {
           chainInfo ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
               数据来自 OKLink 网页端接口（{chainInfo.name}）· 无需 API Key
-              {!txListSupported(chain, 'transaction') && ' · 该链转账列表受页面端签名保护，仅支持内部调用'}
+              {chainInfo.kind === 'tron' && ' · 转账列表来自波场官方浏览器 TronScan'}
             </Text>
           ) : null
         }

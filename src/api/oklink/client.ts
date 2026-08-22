@@ -141,3 +141,48 @@ export async function pageApiFetch<T>(
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
+
+/* ------------------------------------------------------------------ */
+/* TronScan（波场官方浏览器 tronscan.org 的页面端接口）                  */
+/* ------------------------------------------------------------------ */
+
+const TRONSCAN_BASE = '/tronscan';
+
+/**
+ * TronScan 页面端接口（tronscan.org 前端所用的公开接口）。
+ * 该服务对任意来源开放 CORS 且无需任何 Key；这里统一走同源 /tronscan 代理，
+ * 由 Vite dev server（或生产环境代理层）转发到 apilist.tronscanapi.com，
+ * 与 OKLink 请求共享同一网络出口。用于补充 OKLink 已对未登录流量关闭的
+ * TRON 普通转账 / TRC20 转账列表。
+ */
+export async function tronscanFetch<T>(
+  path: string,
+  params: Record<string, string | number | undefined> = {},
+  options: RequestOptions = {},
+): Promise<T> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') qs.set(k, String(v));
+  }
+
+  const maxRetries = options.retries ?? 2;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await rateLimiter.acquire();
+      const res = await fetch(`${TRONSCAN_BASE}/${path}?${qs.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new OklinkApiError(res.status, `TronScan 请求失败（HTTP ${res.status}）`);
+      return (await res.json()) as T;
+    } catch (err) {
+      lastError = err;
+      const isRetryable = err instanceof Error && !!(err.message.startsWith('HTTP 429') || /^HTTP 5\d\d$/.test(err.message));
+      if (!isRetryable || attempt === maxRetries) break;
+      await sleep(1000 * 2 ** attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}

@@ -66,7 +66,7 @@ interface TokenMeta {
 }
 
 const PAGE_SIZE = 50;
-/** 溯源时抓取的交易类型：普通转账 + ERC20 转账 */
+/** 溯源时抓取的交易类型：普通转账 + ERC20/TRC20 转账（TRON 的两类列表来自 TronScan） */
 const TRACE_PROTOCOLS: TxProtocolType[] = ['transaction', 'token_20'];
 
 /**

@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Card, Skeleton, Space, Statistic, Tabs, Typography } from 'antd';
+import { Alert, Button, Card, Skeleton, Space, Statistic, Tag, Tabs, Typography } from 'antd';
 import { CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import { fetchAddressAsset } from '../api/oklink/endpoints';
+import { fetchAddressEntityLabel } from '../api/oklink/entity';
 import { getChain } from '../api/oklink/chains';
 import { copyText, formatAmount, formatTime, formatUsd } from '../utils/format';
 import { useTraceEngine } from '../trace/useTraceEngine';
@@ -13,6 +14,22 @@ import FlowGraph from '../components/graph/FlowGraph';
 import { App } from 'antd';
 
 const { Text } = Typography;
+
+/** 按交易所名称给标签配色，便于一眼区分 Gate / OKX / Binance 等 */
+function exchangeTagColor(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes('binance') || l.includes('bnb')) return 'gold';
+  if (l.includes('okx') || l.includes('okb')) return 'black';
+  if (l.includes('gate')) return 'volcano';
+  if (l.includes('bybit')) return 'purple';
+  if (l.includes('bitget')) return 'cyan';
+  if (l.includes('upbit')) return 'blue';
+  if (l.includes('bithumb')) return 'red';
+  if (l.includes('kucoin') || l.includes('kucoin')) return 'green';
+  if (l.includes('mexc')) return 'magenta';
+  if (l.includes('huobi') || l.includes('htx')) return 'orange';
+  return 'geekblue';
+}
 
 export default function AddressPage() {
   const { chain = 'ETH', address = '' } = useParams();
@@ -30,7 +47,15 @@ export default function AddressPage() {
     queryFn: () => fetchAddressAsset(chain, address),
   });
 
+  // 交易所实体标签（SSR 抓取）：如「Binance. DepositAndWithdraw_10」「Gate.io. Hot wallet」
+  const tagQuery = useQuery({
+    queryKey: ['entity-tag', chain, address],
+    queryFn: () => fetchAddressEntityLabel(chain, address),
+    staleTime: 30 * 60 * 1000,
+  });
+
   const asset = assetQuery.data;
+  const entityTag = tagQuery.data ?? null;
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -49,6 +74,11 @@ export default function AddressPage() {
                 message.success('已复制');
               }}
             />
+            {entityTag && (
+              <Tag color={exchangeTagColor(entityTag)} style={{ fontSize: 13 }}>
+                🏷 {entityTag}
+              </Tag>
+            )}
             {chainInfo && (
               <Button
                 size="small"
