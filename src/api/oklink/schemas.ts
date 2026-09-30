@@ -49,6 +49,8 @@ export const classfyTxSchema = z
 export const transferHitSchema = z
   .object({
     txhash: strField,
+    logIndex: numLike,
+    eventIndex: numLike,
     blockHeight: numLike,
     blocktime: numLike,
     from: strField,
@@ -170,6 +172,8 @@ export const tronscanTxListSchema = z
 export const tronscanTrc20Schema = z
   .object({
     transaction_id: strField,
+    event_index: numLike,
+    log_index: numLike,
     block_ts: numLike,
     block: numLike,
     from_address: strField,
@@ -207,6 +211,8 @@ export const tronscanTrc20ListSchema = z
 
 export interface TxItem {
   txId: string;
+  /** Stable transfer log/event position within the transaction, when supplied. */
+  eventIndex?: string;
   height?: string;
   /** 秒级或毫秒级时间戳字符串，formatTime 会自适应 */
   transactionTime?: string;

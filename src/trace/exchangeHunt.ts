@@ -1,7 +1,7 @@
 import { fetchAddressTransactions } from '../api/oklink/endpoints';
 import { fetchAddressEntityLabel } from '../api/oklink/entity';
 import type { TxItem } from '../api/oklink/schemas';
-import { aggregateCounterparties, fetchTokenMetaMap } from './engine';
+import { aggregateCounterparties, canonicalIdentity, fetchTokenMetaMap } from './engine';
 import { isExchangeTag } from '../utils/exchangeTag';
 import {
   getHuntWallet,
@@ -172,6 +172,7 @@ export class ExchangeHuntEngine {
 
   async start(chain: string, seed: string, opts: HuntOptions): Promise<void> {
     if (this.running) return;
+    seed = canonicalIdentity(seed);
     this.reset();
     this.stopRequested = false;
     this.chain = chain;

@@ -250,6 +250,7 @@ export async function fetchAddressTransactions(
         const failed = !!h.contractRet && h.contractRet !== 'SUCCESS';
         return {
           txId: h.transaction_id ?? '',
+          eventIndex: h.event_index ?? h.log_index,
           height: h.block,
           transactionTime: h.block_ts ? String(Math.floor(Number(h.block_ts) / 1000)) : undefined,
           from: h.from_address ?? '',
@@ -324,6 +325,7 @@ export async function fetchAddressTransactions(
     .map(
       (h): TxItem => ({
         txId: h.txhash ?? '',
+        eventIndex: h.logIndex ?? h.eventIndex,
         height: h.blockHeight,
         transactionTime: h.blocktime,
         from: h.from ?? '',

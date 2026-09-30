@@ -147,17 +147,28 @@ export async function putHuntWalletsIfAbsent(rows: HuntWalletRow[]): Promise<Hun
   const tx = db.transaction(WALLETS, 'readwrite');
   const store = tx.objectStore(WALLETS);
   const inserted: HuntWalletRow[] = [];
-  await Promise.all(
-    rows.map(async (row) => {
-      try {
-        await req(store.add(row)); // add = 主键已存在时抛 ConstraintError
-        inserted.push(row);
-      } catch {
-        // 已访问过 → 跳过
+  return new Promise<HuntWalletRow[]>((resolve, reject) => {
+    let operationError: Error | null = null;
+    tx.oncomplete = () => resolve(inserted);
+    tx.onabort = () => reject(operationError ?? tx.error ?? new Error('Wallet transaction aborted'));
+
+    try {
+      for (const row of rows) {
+        const addReq = store.add(row);
+        addReq.onsuccess = () => inserted.push(row);
+        addReq.onerror = (event) => {
+          if (addReq.error?.name === 'ConstraintError') {
+            event.preventDefault(); // 保留事务，继续插入批内其他钱包
+          } else {
+            operationError ??= addReq.error;
+          }
+        };
       }
-    }),
-  );
-  return inserted;
+    } catch (error) {
+      operationError = error instanceof Error ? error : new Error(String(error));
+      tx.abort();
+    }
+  });
 }
 
 /** 删除一次搜索的全部数据（run 记录 + 其所有钱包行） */
@@ -207,16 +218,16 @@ export async function listHuntHitPage(
   if (total > 0 && offset < total) {
     await new Promise<void>((resolve, reject) => {
       const cursorReq = index.openCursor(range);
-      let skipped = 0;
+      let positioned = offset === 0;
       cursorReq.onsuccess = () => {
         const cursor = cursorReq.result;
         if (!cursor) {
           resolve();
           return;
         }
-        if (skipped < offset) {
-          skipped += 1;
-          cursor.advance(offset - skipped + 1);
+        if (!positioned) {
+          positioned = true;
+          cursor.advance(offset);
           return;
         }
         rows.push(cursor.value as HuntWalletRow);

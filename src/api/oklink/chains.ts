@@ -82,10 +82,18 @@ export function parseSearchInput(raw: string, selectedChain: string): ParsedSear
   if (TX_HASH_PATTERN.test(input)) {
     return { kind: 'tx', chain: selectedChain, txid: input };
   }
-  for (const chain of CHAINS) {
-    if (chain.addressPattern.test(input)) {
-      return { kind: 'address', chain: chain.key, address: input };
-    }
+  const tronChain = CHAINS.find((chain) => chain.kind === 'tron');
+  if (tronChain?.addressPattern.test(input)) {
+    return { kind: 'address', chain: tronChain.key, address: input };
+  }
+  const evmChain = CHAINS.find((chain) => chain.kind === 'evm' && chain.addressPattern.test(input));
+  if (evmChain) {
+    const selected = getChain(selectedChain);
+    return {
+      kind: 'address',
+      chain: selected?.kind === 'evm' ? selected.key : evmChain.key,
+      address: input,
+    };
   }
   // 输入不匹配任何已知格式时，按当前选中链的 EVM 地址处理，让后端返回明确错误
   if (selectedChain === 'TRON') {

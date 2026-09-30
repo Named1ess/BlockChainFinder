@@ -76,9 +76,9 @@ export async function fetchTokenMetaMap(chain: string, address: string, limit = 
     const res = await fetchTokenBalances(chain, address, 1, limit);
     for (const h of res.list) {
       if (!h.tokenContractAddress) continue;
-      meta.set(h.tokenContractAddress.toLowerCase(), {
+      meta.set(canonicalIdentity(h.tokenContractAddress), {
         symbol: h.symbol || h.token || 'UNKNOWN',
-        priceUsd: Number(h.priceUsd),
+        priceUsd: h.priceUsd?.trim() && Number.isFinite(Number(h.priceUsd)) ? Number(h.priceUsd) : null,
       });
     }
   } catch {
@@ -97,6 +97,8 @@ export class TraceEngine {
   private chain: string | null = null;
   private running = false;
   private stopRequested = false;
+  private generation = 0;
+  private seenEvents = new Set<string>();
   private done = 0;
   private error: string | null = null;
   private queue: QueuedNode[] = [];
@@ -138,27 +140,38 @@ export class TraceEngine {
   /** 从种子地址开始自动多跳溯源 */
   async start(chain: string, seed: string, opts: TraceOptions): Promise<void> {
     if (this.running) return;
+    seed = canonicalIdentity(seed);
     this.reset();
+    const generation = this.generation;
+    this.stopRequested = false;
     this.chain = chain;
     this.seed = seed;
     this.addNode(seed, 0);
     this.queue.push({ address: seed, depth: 0 });
     this.running = true;
     this.emit();
-    await this.drain(opts);
+    await this.drain(opts, generation);
   }
 
   /** 手动展开单个节点（不受 maxDepth 限制，新邻居不自动入队） */
   async expandNode(address: string, opts: TraceOptions): Promise<void> {
     if (this.running) return;
+    address = canonicalIdentity(address);
     const node = this.graph.nodes.get(address);
     if (!node || node.expanded) return;
+    const generation = this.generation;
+    this.stopRequested = false;
     this.running = true;
     this.error = null;
     this.emit();
-    await this.processNode(address, node.depth, opts, false);
-    this.running = false;
-    this.emit();
+    try {
+      await this.processNode(address, node.depth, opts, false, generation);
+    } finally {
+      if (generation === this.generation) {
+        this.running = false;
+        this.emit();
+      }
+    }
   }
 
   stop(): void {
@@ -166,6 +179,7 @@ export class TraceEngine {
   }
 
   reset(): void {
+    this.generation += 1;
     this.stopRequested = true;
     this.graph = createEmptyGraph();
     this.seed = null;
@@ -174,32 +188,38 @@ export class TraceEngine {
     this.done = 0;
     this.error = null;
     this.queue = [];
+    this.seenEvents.clear();
     this.depthCounts.clear();
     this.cachedSnapshot = null;
     this.emit();
   }
 
-  private async drain(opts: TraceOptions): Promise<void> {
-    this.stopRequested = false;
-    while (this.queue.length > 0 && !this.stopRequested) {
-      if (this.graph.nodes.size >= opts.maxNodes) {
-        this.error = `已达节点上限（${opts.maxNodes}），停止展开。可调大上限或收紧过滤条件。`;
-        break;
+  private async drain(opts: TraceOptions, generation: number): Promise<void> {
+    try {
+      while (generation === this.generation && this.queue.length > 0 && !this.stopRequested) {
+        if (this.graph.nodes.size >= opts.maxNodes) {
+          this.error = `已达节点上限（${opts.maxNodes}），停止展开。可调大上限或收紧过滤条件。`;
+          break;
+        }
+        const { address, depth } = this.queue.shift()!;
+        await this.processNode(address, depth, opts, true, generation);
+        if (generation !== this.generation) return;
+        if (this.stopRequested) break;
+        this.done += 1;
+        this.emit();
       }
-      const { address, depth } = this.queue.shift()!;
-      await this.processNode(address, depth, opts, true);
-      this.done += 1;
-      this.emit();
+    } finally {
+      if (generation === this.generation) {
+        this.running = false;
+        this.emit();
+      }
     }
-    this.running = false;
-    this.emit();
   }
 
   /** 拉取 address 的普通+代币交易、解析对手方并更新图。autoQueue=true 时新邻居按深度规则入队 */
-  private async processNode(address: string, depth: number, opts: TraceOptions, autoQueue: boolean): Promise<void> {
+  private async processNode(address: string, depth: number, opts: TraceOptions, autoQueue: boolean, generation: number): Promise<void> {
     const node = this.graph.nodes.get(address);
     if (!node || node.expanded) return;
-    node.expanded = true;
 
     const chain = this.chain ?? 'ETH';
     const protocols = TRACE_PROTOCOLS.filter((p) => txListSupported(chain, p));
@@ -207,45 +227,71 @@ export class TraceEngine {
       this.error = '当前链的网页端接口暂不支持交易列表抓取（Tron 转账列表受 OKLink 签名网关保护），无法溯源。';
       return;
     }
-    let txs: TxItem[] = [];
+    const observations = new Map<string, TxItem>();
     try {
       for (const protocol of protocols) {
+        const occurrences = new Map<string, number>();
         for (let page = 1; page <= opts.pagesPerNode; page++) {
           const res = await fetchAddressTransactions(chain, address, page, PAGE_SIZE, protocol);
-          txs.push(...res.transactions);
+          if (generation !== this.generation || this.stopRequested) return;
+          // Count unindexed token occurrences across this address's full history;
+          // the graph ledger then takes maximum multiplicity across address views.
+          for (const tx of res.transactions) {
+            const fingerprint = eventFingerprint(tx, protocol);
+            const ordinal = (occurrences.get(fingerprint) ?? 0) + 1;
+            occurrences.set(fingerprint, ordinal);
+            const exact = tx.txId && (protocol === 'transaction' || (tx.eventIndex !== undefined && tx.eventIndex !== ''));
+            const id = exact
+              ? fingerprint : `${fingerprint}:${ordinal}`;
+            observations.set(id, tx);
+          }
           if (page >= res.totalPage) break;
         }
       }
     } catch (err) {
+      if (generation !== this.generation || this.stopRequested) return;
       this.error = err instanceof Error ? err.message : String(err);
       return;
     }
 
     // 用该地址自己的持仓列表补全代币符号与价格（合约地址 -> 元信息）
     const tokenMeta = await this.loadTokenMeta(chain, address);
+    if (generation !== this.generation || this.stopRequested) return;
+    node.expanded = true;
 
-    const agg = aggregateCounterparties(txs, address, opts.direction, tokenMeta);
+    const agg = aggregateCounterparties([...observations.values()], address, opts.direction, tokenMeta);
 
     // 按 USD 金额降序排列，取前 maxNeighbors 个；价格未知者视为 0 排在后面
     const ranked = [...agg.entries()]
       .map(([cp, data]) => ({
         cp,
         usd: [...data.out.values(), ...data.in.values()].reduce((s, t) => s + (t.usdValue ?? 0), 0),
-        data,
+        unknownPrice: [...data.out.values(), ...data.in.values()].some((t) => t.usdValue === null),
       }))
-      .filter((e) => e.usd >= opts.minUsd)
+      .filter((e) => e.unknownPrice || e.usd >= opts.minUsd)
       .sort((a, b) => b.usd - a.usd)
       .slice(0, opts.maxNeighbors);
 
-    for (const { cp, data } of ranked) {
+    const selected = new Set(ranked.map(({ cp }) => cp));
+    const newTransactions: TxItem[] = [];
+    for (const [id, tx] of observations) {
+      if (this.seenEvents.has(id)) continue;
+      const counterparties = aggregateCounterparties([tx], address, opts.direction, tokenMeta);
+      if (![...counterparties.keys()].some((cp) => selected.has(cp))) continue;
+      this.seenEvents.add(id);
+      newTransactions.push(tx);
+    }
+    const additions = aggregateCounterparties(newTransactions, address, opts.direction, tokenMeta);
+    for (const { cp } of ranked) {
+      const data = additions.get(cp);
       for (const dir of ['out', 'in'] as const) {
-        const transfers = [...data[dir].values()].filter((t) => t.count > 0);
+        const transfers = data ? [...data[dir].values()].filter((t) => t.count > 0) : [];
         if (transfers.length === 0) continue;
         const [from, to] = dir === 'out' ? [address, cp] : [cp, address];
         this.upsertEdge(from, to, transfers);
       }
 
-      if (!this.graph.nodes.has(cp)) {
+      if (data && !this.graph.nodes.has(cp)) {
         if (this.graph.nodes.size >= opts.maxNodes) continue;
         this.addNode(cp, depth + 1);
         if (autoQueue && depth + 1 < opts.maxDepth) {
@@ -282,12 +328,12 @@ export class TraceEngine {
     }
     for (const t of transfers) {
       const existing = edge.transfers.find(
-        (e) => e.token === t.token && e.contract === t.contract && (e.usdValue === null) === (t.usdValue === null),
+        (e) => assetKey(e.contract, e.token) === assetKey(t.contract, t.token) && (e.usdValue === null) === (t.usdValue === null),
       );
       if (existing) {
         existing.amount += t.amount;
         existing.count += t.count;
-        existing.usdValue = (existing.usdValue ?? 0) + (t.usdValue ?? 0);
+        existing.usdValue = existing.usdValue === null ? null : existing.usdValue + (t.usdValue ?? 0);
         existing.lastTime = Math.max(existing.lastTime ?? 0, t.lastTime ?? 0) || null;
       } else {
         edge.transfers.push({ ...t });
@@ -323,7 +369,7 @@ export function aggregateCounterparties(
     if (!Number.isFinite(amount) || amount <= 0) continue;
 
     const contract = tx.tokenContractAddress || '';
-    const meta = contract ? tokenMeta.get(contract.toLowerCase()) : undefined;
+    const meta = contract ? tokenMeta.get(canonicalIdentity(contract)) : undefined;
     const price = meta?.priceUsd;
     const usd = price !== undefined && price !== null && Number.isFinite(price) ? amount * price : null;
     const token = meta?.symbol ?? txTokenSymbol(tx);
@@ -337,28 +383,58 @@ export function aggregateCounterparties(
     let counterparty: string | null = null;
     let dir: 'in' | 'out' | null = null;
     if ((direction === 'out' || direction === 'both') && sameAddress(from, self)) {
-      counterparty = to;
+      counterparty = canonicalIdentity(to);
       dir = 'out';
     } else if ((direction === 'in' || direction === 'both') && sameAddress(to, self)) {
-      counterparty = from;
+      counterparty = canonicalIdentity(from);
       dir = 'in';
     }
     if (!counterparty || !dir) continue;
 
     const bucket = ensure(counterparty)[dir];
-    const existing = bucket.get(token);
+    const key = assetKey(contract, token);
+    const existing = bucket.get(key);
     if (existing) {
       existing.amount += amount;
       existing.count += 1;
+      existing.usdValue = existing.usdValue === null || usd === null ? null : existing.usdValue + usd;
       existing.lastTime = Math.max(existing.lastTime ?? 0, time ?? 0) || null;
     } else {
-      bucket.set(token, { token, contract, amount, count: 1, usdValue: usd, lastTime: time });
+      bucket.set(key, { token, contract, amount, count: 1, usdValue: usd, lastTime: time });
     }
   }
   return agg;
 }
 
-/** 地址比较统一转小写（EVM）；TRON 等 base58 地址不受影响 */
+function assetKey(contract: string, token: string): string {
+  return contract ? `contract:${canonicalIdentity(contract)}` : `native:${token}`;
+}
+
+/** EVM hex identity ignores checksum case; Base58 identity is case sensitive. */
+export function canonicalIdentity(value: string): string {
+  return /^0x[0-9a-f]+$/i.test(value) ? value.toLowerCase() : value;
+}
+
+/**
+ * Native transaction hashes and indexed token events are exact. Without a token
+ * index, fingerprint + per-address ordinal preserves identical events across
+ * pages and takes their maximum multiplicity across address views. This assumes
+ * stable pagination: overlapping unindexed pages may overcount indistinguishable
+ * events. A missing hash also makes otherwise identical transfers ambiguous.
+ * Protocol separates native value from token logs in the same transaction.
+ */
+function eventFingerprint(tx: TxItem, protocol: TxProtocolType): string {
+  const asset = assetKey(tx.tokenContractAddress ?? '', tx.transactionSymbol ?? 'UNKNOWN');
+  const hash = canonicalIdentity(tx.txId);
+  if (hash && protocol === 'transaction') return JSON.stringify([protocol, hash]);
+  if (tx.txId && tx.eventIndex !== undefined && tx.eventIndex !== '') {
+    return JSON.stringify([protocol, hash, asset, tx.eventIndex]);
+  }
+  return JSON.stringify([protocol, hash, asset, canonicalIdentity(tx.from), canonicalIdentity(tx.to), tx.amount,
+    ...(hash ? [] : [tx.height, tx.transactionTime])]);
+}
+
+/** EVM checksum variants compare equally; Base58 retains case. */
 function sameAddress(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return canonicalIdentity(a) === canonicalIdentity(b);
 }
