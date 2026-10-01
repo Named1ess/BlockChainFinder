@@ -247,6 +247,9 @@ export interface TokenHolding {
 }
 
 export interface AddressAsset {
+  dataSource?: 'Blockscout' | 'TronScan' | 'TronGrid';
+  /** 部分数据接口失败时提示缺失项，不把缺失值显示成已确认的零余额。 */
+  warnings?: string[];
   address?: string;
   chainShortName?: string;
   balance?: string;

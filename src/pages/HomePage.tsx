@@ -3,14 +3,15 @@ import { Button, Card, Col, Row, Space, Tag, Typography } from 'antd';
 import { NodeIndexOutlined, PartitionOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { CHAINS } from '../api/oklink/chains';
 import { DEMO_A } from '../demo';
+import { getEntityLabelSource } from '../api/oklink/entity';
 
-const { Title, Paragraph, Text } = Typography;
+const { Title, Paragraph } = Typography;
 
 const FEATURES = [
   {
     icon: <SearchOutlined />,
     title: '地址画像',
-    desc: '查询任意地址的原生币余额、代币持仓与完整交易记录。',
+    desc: '查询地址的原生币余额、代币持仓与交易记录，缺失信息会明确提示。',
   },
   {
     icon: <PartitionOutlined />,
@@ -25,7 +26,7 @@ const FEATURES = [
   {
     icon: <SendOutlined />,
     title: '多链支持',
-    desc: 'Ethereum / BNB Chain / Polygon 走 OKLink 页面端接口，Tron 转账列表走波场官方浏览器 TronScan，均无需 Key。',
+    desc: '已接入 Ethereum / Polygon / Tron；BNB Chain 暂未接入可用数据源。',
   },
 ];
 
@@ -37,8 +38,8 @@ export default function HomePage() {
       <div style={{ textAlign: 'center', padding: '48px 0 32px' }}>
         <Title level={2}>区块链资金溯源工具</Title>
         <Paragraph type="secondary" style={{ fontSize: 16 }}>
-          基于 OKLink 网页端数据接口的链上资金流分析与可视化（无需 API Key）
-          {__OKLINK_MOCK__ && (
+          多链地址查询与资金流分析可视化
+          {__APP_MOCK__ && (
             <Tag color="orange" style={{ marginLeft: 8 }}>
               演示模式（Mock 数据）
             </Tag>
@@ -53,7 +54,7 @@ export default function HomePage() {
           >
             在上方搜索框输入地址开始
           </Button>
-          {__OKLINK_MOCK__ && (
+          {__APP_MOCK__ && (
             <Button size="large" onClick={() => navigate(`/address/ETH/${DEMO_A}`)}>
               试试演示地址 →
             </Button>
@@ -71,17 +72,21 @@ export default function HomePage() {
         ))}
       </Row>
 
-      <Card style={{ marginTop: 16 }} title="支持的链">
+      <Card style={{ marginTop: 16 }} title="数据源与链支持">
+        {getEntityLabelSource('ETH') === 'OKLink' && (
+          <Paragraph>地址与盒武器搜索的标签来源：OKLink 网页搜索。首次查询需要等待官网加载，重复地址会使用短期缓存。</Paragraph>
+        )}
         <Space wrap>
           {CHAINS.map((c) => (
-            <Tag key={c.key} color="blue">
-              {c.name} ({c.key})
+            <Tag key={c.key} color={c.dataSource ? 'blue' : 'default'}>
+              {c.name} ({c.key}) · {c.dataSource ?? '暂未接入'}
             </Tag>
           ))}
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-          直接使用 <Text code>npm run dev</Text> 启动即可抓取 OKLink 网页端真实数据，无需配置任何
-          Key；当前演示模式（Mock）使用内置离线数据。
+          {__APP_MOCK__
+            ? '当前为演示模式，Ethereum / Polygon 使用内置离线数据，其他链不提供演示数据。'
+            : 'Ethereum 和 Polygon 使用 Blockscout。Tron 使用 TronScan，TRX 余额与 TRC20 持仓查询遇到授权失败时使用 TronGrid。TronGrid 匿名查询可能受到限流或访问限制，可在服务端配置独立的 TronGrid API Key。BNB Chain 暂不支持应用内查询，可通过 BscScan 查看。'}
         </Paragraph>
       </Card>
     </div>

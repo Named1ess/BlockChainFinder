@@ -9,6 +9,7 @@ import { useExchangeHunt } from '../trace/useExchangeHunt';
 import { exchangeTagColor } from '../utils/exchangeTag';
 import { shortAddress } from '../utils/format';
 import { getChain } from '../api/oklink/chains';
+import { getEntityLabelSource } from '../api/oklink/entity';
 import {
   deleteHuntRunData,
   getHuntRun,
@@ -32,10 +33,19 @@ const STATUS_TEXT: Record<HuntRunRow['status'], string> = {
   running: '运行中',
   'hit-target': '已达标',
   stopped: '手动停止',
-  exhausted: '全部搜完',
+  exhausted: '采样范围结束',
   'wallet-cap': '触达钱包上限',
   'seed-is-exchange': '种子即交易所',
+  failed: '搜索失败',
+  partial: '结果不完整',
 };
+
+function statusAlertType(status: HuntRunRow['status']): 'info' | 'success' | 'warning' | 'error' {
+  if (status === 'failed') return 'error';
+  if (status === 'partial') return 'warning';
+  if (status === 'hit-target' || status === 'seed-is-exchange') return 'success';
+  return 'info';
+}
 
 /**
  * 盒武器搜索面板：
@@ -94,27 +104,17 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
     queryKey: ['hunt-hits', activeRunId, page, PAGE_SIZE, viewRunId ? 'static' : snapshot.version],
     queryFn: () => listHuntHitPage(activeRunId!, page * PAGE_SIZE, PAGE_SIZE),
     enabled: !!activeRunId,
-    placeholderData: (prev) => prev,
+    placeholderData: (prev, previousQuery) => previousQuery?.queryKey[1] === activeRunId ? prev : undefined,
     staleTime: 200,
   });
 
   const rows: HuntWalletRow[] = hitsQuery.data?.rows ?? [];
   const total = hitsQuery.data?.total ?? 0;
-  const statsSource: Pick<
-    HuntRunRow,
-    'scanned' | 'tagChecked' | 'depth' | 'hitCount' | 'firstHitDepth' | 'status'
-  > =
-    viewRunId && runRowQuery.data
-      ? runRowQuery.data
-      : {
-          scanned: snapshot.scanned,
-          tagChecked: snapshot.tagChecked,
-          depth: snapshot.depth,
-          hitCount: snapshot.hitCount,
-          firstHitDepth: snapshot.firstHitDepth,
-          status: snapshot.running ? 'running' : snapshot.finished ? 'hit-target' : 'stopped',
-        };
-  const hitLimitShown = viewRunId ? runRowQuery.data?.hitLimit ?? 0 : hitLimit;
+  // 结果属于搜索记录，与用户当前浏览的地址页链无关。历史元信息未到达时不猜测链。
+  const resultChain = viewRunId ? runRowQuery.data?.chain : snapshot.chain;
+  const statsSource = viewRunId ? runRowQuery.data : snapshot;
+  const viewedRunning = !viewRunId && snapshot.running;
+  const hitLimitShown = statsSource?.hitLimit ?? 0;
 
   const columns: ColumnsType<HuntWalletRow> = [
     {
@@ -132,9 +132,11 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
     {
       title: '命中钱包',
       render: (_, h) => (
-        <Link to={`/address/${chain}/${h.address}`} title={h.address}>
-          <Text code className="mono" style={{ fontSize: 12 }}>{shortAddress(h.address, 10, 8)}</Text>
-        </Link>
+        resultChain ? (
+          <Link to={`/address/${resultChain}/${h.address}`} title={h.address}>
+            <Text code className="mono" style={{ fontSize: 12 }}>{shortAddress(h.address, 10, 8)}</Text>
+          </Link>
+        ) : <Text code className="mono" title={h.address}>{shortAddress(h.address, 10, 8)}</Text>
       ),
     },
     { title: '跳数', width: 70, align: 'right', dataIndex: 'depth' },
@@ -147,9 +149,13 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
             return (
               <span key={`${addr}-${i}`}>
                 {i > 0 && <Text type="secondary"> → </Text>}
-                <Link to={`/address/${chain}/${addr}`} title={addr} style={{ fontWeight: end ? 600 : 400 }}>
-                  {shortAddress(addr, end ? 8 : 6, end ? 6 : 4)}
-                </Link>
+                {resultChain ? (
+                  <Link to={`/address/${resultChain}/${addr}`} title={addr} style={{ fontWeight: end ? 600 : 400 }}>
+                    {shortAddress(addr, end ? 8 : 6, end ? 6 : 4)}
+                  </Link>
+                ) : (
+                  <Text title={addr} strong={end}>{shortAddress(addr, end ? 8 : 6, end ? 6 : 4)}</Text>
+                )}
               </span>
             );
           })}
@@ -163,8 +169,9 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
       <Paragraph type="secondary" style={{ marginBottom: 12 }}>
         从当前地址出发逐层加深扫描对手方钱包并逐一检查交易所标签，<b>跳数不设上限</b>——
         一路挖到命中目标个数为止；即使达标，也会把<b>当前层全部钱包</b>检查完才停止。
-        未达目标时某层有命中会继续向更深挖掘。仅当全部对手方搜索完毕（或触达钱包上限）仍未达标才结束。
+        未达目标时某层有命中会继续向更深挖掘。当前采样范围搜索结束（或触达钱包上限）仍未达标时会停止。
         深度指标 = 命中的交易所钱包个数。所有钱包与命中结果流式写入本地数据库（IndexedDB），可随时回看历史搜索。
+        新查询的标签来源：{getEntityLabelSource(chain)}。公开标签覆盖有限，命中结果需要进一步核实；未命中不代表不存在交易所关联。
       </Paragraph>
 
       <Space wrap size={16} style={{ marginBottom: 12 }} align="center">
@@ -213,7 +220,7 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
             开始盒武器搜索
           </Button>
         )}
-        {!snapshot.running && (total > 0 || statsSource.scanned > 0) && (
+        {!snapshot.running && (total > 0 || (statsSource?.scanned ?? 0) > 0) && (
           <Button
             icon={<ClearOutlined />}
             onClick={() => {
@@ -253,23 +260,29 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
       </Space>
 
       <Card size="small" style={{ marginBottom: 12, background: '#fafafa' }}>
-        <Space wrap size={24}>
-          <StatInline label="当前跳数" value={statsSource.depth > 0 || snapshot.running ? `${statsSource.depth}` : '-'} />
-          <StatInline label="已展开钱包" value={`${statsSource.scanned}`} />
-          <StatInline label="已查标签" value={`${statsSource.tagChecked}`} />
-          <StatInline label="队列剩余" value={`${snapshot.running ? snapshot.pending : 0}`} />
-          <StatInline
-            label={hitLimitShown > 0 ? `命中交易所 / 目标 ${hitLimitShown}` : '命中交易所'}
-            value={
-              <Text strong type={statsSource.hitCount > 0 ? 'success' : undefined} style={{ fontSize: 18 }}>
-                {hitLimitShown > 0 ? `${statsSource.hitCount} / ${hitLimitShown}` : statsSource.hitCount}
-              </Text>
-            }
-          />
-          {statsSource.firstHitDepth !== null && (
-            <StatInline label="首次命中跳数" value={`${statsSource.firstHitDepth}`} />
-          )}
-        </Space>
+        {statsSource ? (
+          <Space wrap size={24}>
+            <StatInline label="搜索状态" value={statsSource.status ? STATUS_TEXT[statsSource.status] : '未开始'} />
+            <StatInline label="当前跳数" value={statsSource.depth > 0 || viewedRunning ? `${statsSource.depth}` : '-'} />
+            <StatInline label="已展开钱包" value={`${statsSource.scanned}`} />
+            <StatInline label="已查标签" value={`${statsSource.tagChecked}`} />
+            <StatInline label="队列剩余" value={`${viewedRunning ? snapshot.pending : 0}`} />
+            {(statsSource.failedRequests ?? 0) > 0 && (
+              <StatInline label="请求失败" value={`${statsSource.failedRequests}`} />
+            )}
+            <StatInline
+              label={hitLimitShown > 0 ? `命中交易所 / 目标 ${hitLimitShown}` : '命中交易所'}
+              value={
+                <Text strong type={statsSource.hitCount > 0 ? 'success' : undefined} style={{ fontSize: 18 }}>
+                  {hitLimitShown > 0 ? `${statsSource.hitCount} / ${hitLimitShown}` : statsSource.hitCount}
+                </Text>
+              }
+            />
+            {statsSource.firstHitDepth !== null && (
+              <StatInline label="首次命中跳数" value={`${statsSource.firstHitDepth}`} />
+            )}
+          </Space>
+        ) : <Text type="secondary">正在读取历史搜索…</Text>}
       </Card>
 
       {snapshot.running && !viewRunId && (
@@ -288,29 +301,24 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
           }`}
         />
       )}
-      {!snapshot.running && snapshot.error && !viewRunId && (
+      {!snapshot.running && snapshot.status && snapshot.status !== 'running' && !viewRunId && (
         <Alert
-          type={snapshot.finished ? 'success' : 'warning'}
+          type={statusAlertType(snapshot.status)}
           showIcon
           style={{ marginBottom: 12 }}
-          message={
-            snapshot.finished
-              ? `搜索完成：累计命中 ${snapshot.hitCount} 个交易所钱包${
-                  snapshot.firstHitDepth !== null ? `（首次命中于第 ${snapshot.firstHitDepth} 跳）` : ''
-                }`
-              : '搜索结束'
-          }
+          message={`${STATUS_TEXT[snapshot.status]}：累计命中 ${snapshot.hitCount} 个交易所钱包`}
           description={snapshot.error}
         />
       )}
-      {!snapshot.running && viewRunId && runRowQuery.data && (
+      {viewRunId && runRowQuery.data && (
         <Alert
-          type="info"
+          type={statusAlertType(runRowQuery.data.status)}
           showIcon
           style={{ marginBottom: 12 }}
           message={`正在回看历史搜索：${STATUS_TEXT[runRowQuery.data.status]} · 命中 ${runRowQuery.data.hitCount} 个`}
           description={
-            <Space>
+            <Space direction="vertical">
+              {runRowQuery.data.error && <Text>{runRowQuery.data.error}</Text>}
               <Button
                 danger
                 size="small"
@@ -356,7 +364,7 @@ export default function ExchangeHuntPanel({ chain, address }: Props) {
       />
 
       {!snapshot.running && !viewRunId && snapshot.tagChecked > 0 && total === 0 && !snapshot.error && (
-        <Alert type="info" showIcon style={{ marginTop: 12 }} message={`已检查 ${snapshot.tagChecked} 个钱包，均无交易所标签。`} />
+        <Alert type="info" showIcon style={{ marginTop: 12 }} message={`已检查 ${snapshot.tagChecked} 个钱包，当前标签源未返回交易所标签；未命中不代表不存在交易所关联。`} />
       )}
     </div>
   );

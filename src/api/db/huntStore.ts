@@ -16,7 +16,7 @@ export interface HuntRunRow {
   seed: string;
   startedAt: number;
   finishedAt: number | null;
-  status: 'running' | 'hit-target' | 'stopped' | 'exhausted' | 'wallet-cap' | 'seed-is-exchange';
+  status: 'running' | 'hit-target' | 'stopped' | 'exhausted' | 'wallet-cap' | 'seed-is-exchange' | 'failed' | 'partial';
   maxWallets: number;
   maxNeighbors: number;
   hitLimit: number;
@@ -28,6 +28,8 @@ export interface HuntRunRow {
   hitCount: number;
   firstHitDepth: number | null;
   error: string | null;
+  /** 最终仍失败的钱包展开/标签查询数；旧记录没有此字段 */
+  failedRequests?: number;
 }
 
 export interface HuntWalletRow {
@@ -40,8 +42,10 @@ export interface HuntWalletRow {
   /** 距种子的跳数 */
   depth: number;
   expanded: 0 | 1;
-  /** 交易所标签原文（未检查为 null，非交易所为 ''） */
+  /** 实体标签原文（未检查或查询失败为 null，成功但无标签为 ''） */
   tag: string | null;
+  tagError?: string | null;
+  expansionError?: string | null;
   isHit: 0 | 1;
   /** 命中时回溯好的完整资金路径 seed -> ... -> 本地址 */
   path: string[] | null;
@@ -88,12 +92,28 @@ function walletKey(huntId: string, address: string): string {
   return `${huntId}|${address}`;
 }
 
+/** 写请求成功后事务仍可能回滚，必须等待提交完成才能向调用方报告成功。 */
+async function putRow(storeName: typeof RUNS | typeof WALLETS, row: HuntRunRow | HuntWalletRow): Promise<void> {
+  const db = await openDB();
+  const tx = db.transaction(storeName, 'readwrite');
+  await new Promise<void>((resolve, reject) => {
+    let operationError: Error | null = null;
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(operationError ?? tx.error ?? new DOMException('数据库写入事务已中止', 'AbortError'));
+    try {
+      const request = tx.objectStore(storeName).put(row);
+      request.onerror = () => { operationError = request.error; };
+    } catch (error) {
+      operationError = error instanceof Error ? error : new Error(String(error));
+      tx.abort();
+    }
+  });
+}
+
 /* ---------------- runs ---------------- */
 
 export async function saveHuntRun(run: HuntRunRow): Promise<void> {
-  const db = await openDB();
-  const store = db.transaction(RUNS, 'readwrite').objectStore(RUNS);
-  await req(store.put(run));
+  await putRow(RUNS, run);
 }
 
 export async function getHuntRun(id: string): Promise<HuntRunRow | undefined> {
@@ -132,9 +152,7 @@ export async function getHuntWallet(huntId: string, address: string): Promise<Hu
 }
 
 export async function putHuntWallet(row: HuntWalletRow): Promise<void> {
-  const db = await openDB();
-  const store = db.transaction(WALLETS, 'readwrite').objectStore(WALLETS);
-  await req(store.put(row));
+  await putRow(WALLETS, row);
 }
 
 /**

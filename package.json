@@ -7,7 +7,7 @@
     "test": "vitest run",
     "test:typecheck": "tsc -p tsconfig.test.json",
     "dev": "cross-env NODE_USE_ENV_PROXY=1 vite",
-    "dev:mock": "cross-env OKLINK_MOCK=1 vite",
+    "dev:mock": "cross-env APP_MOCK=1 vite",
     "build": "tsc -b && vite build",
     "preview": "cross-env NODE_USE_ENV_PROXY=1 vite preview"
   },
@@ -30,6 +30,7 @@
     "cross-env": "^7.0.3",
     "fake-indexeddb": "^6.2.5",
     "https-proxy-agent": "^9.1.0",
+    "playwright-core": "^1.63.0",
     "typescript": "~5.7.2",
     "vite": "^6.2.0",
     "vitest": "^3.2.7"

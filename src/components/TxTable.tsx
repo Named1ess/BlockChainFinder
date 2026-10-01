@@ -8,6 +8,7 @@ import { fetchAddressTransactions, txListSupported, type TxProtocolType } from '
 import { getChain } from '../api/oklink/chains';
 import { txTokenSymbol, type TxItem } from '../api/oklink/schemas';
 import { formatAmount, formatTime, shortAddress } from '../utils/format';
+import { canonicalIdentity } from '../trace/engine';
 
 const { Text } = Typography;
 
@@ -23,25 +24,37 @@ const PROTOCOL_OPTIONS: Array<{ label: string; value: TxProtocolType; disabled?:
 ];
 
 function sameAddr(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return canonicalIdentity(a) === canonicalIdentity(b);
 }
 
 export default function TxTable({ chain, address }: Props) {
   const [page, setPage] = useState(1);
   const [protocolType, setProtocolType] = useState<TxProtocolType>(() =>
-    txListSupported(chain, 'transaction') ? 'transaction' : 'internal',
+    PROTOCOL_OPTIONS.find((option) => txListSupported(chain, option.value))?.value ?? 'transaction',
   );
   const chainInfo = getChain(chain);
+  const protocolSupported = txListSupported(chain, protocolType);
 
-  // 切换链后若当前类型不被支持（如 Tron 的转账列表），自动回落到内部调用
+  // 切换链后只选择当前数据源已支持的交易类型。
   useEffect(() => {
-    if (!txListSupported(chain, protocolType)) setProtocolType('internal');
+    if (!txListSupported(chain, protocolType)) {
+      const supported = PROTOCOL_OPTIONS.find((option) => txListSupported(chain, option.value));
+      if (supported) setProtocolType(supported.value);
+    }
   }, [chain, protocolType]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [chain, address]);
 
   const query = useQuery({
     queryKey: ['txs', chain, address, page, protocolType],
     queryFn: () => fetchAddressTransactions(chain, address, page, 20, protocolType),
-    placeholderData: (prev) => prev,
+    enabled: protocolSupported,
+    placeholderData: (prev, previousQuery) =>
+      previousQuery?.queryKey[1] === chain && previousQuery.queryKey[2] === address && previousQuery.queryKey[4] === protocolType
+        ? prev
+        : undefined,
   });
 
   const columns: ColumnsType<TxItem> = [
@@ -85,10 +98,14 @@ export default function TxTable({ chain, address }: Props) {
       title: '状态',
       width: 80,
       render: (_, tx) =>
-        !tx.state || tx.state === 'success' ? (
+        tx.state === 'pending' ? (
+          <Tag>待确认</Tag>
+        ) : tx.state === 'success' ? (
           <CheckCircleFilled style={{ color: '#52c41a' }} />
-        ) : (
+        ) : tx.state === 'fail' ? (
           <CloseCircleFilled style={{ color: '#ff4d4f' }} />
+        ) : (
+          <Tag>未知</Tag>
         ),
     },
     {
@@ -122,6 +139,9 @@ export default function TxTable({ chain, address }: Props) {
           </Text>
         }
       />
+      {!protocolSupported && (
+        <Alert type="warning" showIcon style={{ margin: '12px 0' }} message="当前数据源不支持该交易类型" />
+      )}
       {query.isError && (
         <Alert
           type="error"
@@ -133,13 +153,15 @@ export default function TxTable({ chain, address }: Props) {
       )}
       <Table
         style={{ marginTop: 12 }}
-        rowKey={(tx) => tx.txId}
+        rowKey="key"
         columns={columns}
-        dataSource={query.data?.transactions ?? []}
-        loading={query.isPending || query.isFetching}
+        dataSource={(query.data?.transactions ?? []).map((tx, index) => ({
+          ...tx, key: `${protocolType}:${tx.txId}:${tx.eventIndex ?? ''}:${index}`,
+        }))}
+        loading={protocolSupported && (query.isPending || query.isFetching)}
         size="small"
         scroll={{ x: 980 }}
-        locale={{ emptyText: empty && !query.isError ? '该类型下暂无交易' : '暂无数据' }}
+        locale={{ emptyText: !protocolSupported ? '当前交易类型暂不支持' : empty && !query.isError ? '该类型下暂无交易' : '暂无数据' }}
         pagination={{
           current: page,
           pageSize: 20,
@@ -148,10 +170,9 @@ export default function TxTable({ chain, address }: Props) {
           onChange: setPage,
         }}
         footer={() =>
-          chainInfo ? (
+          query.data?.dataSource ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              数据来自 OKLink 网页端接口（{chainInfo.name}）· 无需 API Key
-              {chainInfo.kind === 'tron' && ' · 转账列表来自波场官方浏览器 TronScan'}
+              数据来源：{query.data.dataSource}（{chainInfo?.name ?? chain}）
             </Text>
           ) : null
         }

@@ -5,6 +5,7 @@ import SearchBar from './components/SearchBar';
 import HomePage from './pages/HomePage';
 import AddressPage from './pages/AddressPage';
 import TxPage from './pages/TxPage';
+import { getEntityLabelSource } from './api/oklink/entity';
 
 const { Header, Content, Footer } = Layout;
 
@@ -21,7 +22,8 @@ function AppLayout() {
         <Outlet />
       </Content>
       <Footer style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
-        数据来源：OKLink / TronScan 页面端数据接口 · 本工具仅供研究学习使用
+        {__APP_MOCK__ ? '离线演示数据（非真实链上记录）' : '数据来源：Blockscout / TronScan / TronGrid'} · 本工具仅供研究学习使用
+        {getEntityLabelSource('ETH') === 'OKLink' && ' · 地址标签：OKLink'}
       </Footer>
     </Layout>
   );

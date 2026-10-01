@@ -38,7 +38,11 @@ export default function SearchBar() {
         value={chain}
         onChange={setChain}
         style={{ width: 140 }}
-        options={CHAINS.map((c) => ({ value: c.key, label: `${c.name} (${c.key})` }))}
+        options={CHAINS.map((c) => ({
+          value: c.key,
+          label: `${c.name} (${c.key})${c.dataSource ? '' : ' · 暂未接入'}`,
+          disabled: !c.dataSource || (__APP_MOCK__ && c.key !== 'ETH' && c.key !== 'POLYGON'),
+        }))}
       />
       <Input
         placeholder="输入钱包地址 / 合约地址 / 交易哈希"

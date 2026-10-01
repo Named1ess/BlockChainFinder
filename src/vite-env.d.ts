@@ -1,3 +1,3 @@
 /// <reference types="vite/client" />
 
-declare const __OKLINK_MOCK__: boolean;
+declare const __APP_MOCK__: boolean;

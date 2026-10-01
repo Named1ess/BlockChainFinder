@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSearchInput } from '../src/api/oklink/chains';
+import { getExplorerUrl, parseSearchInput } from '../src/api/oklink/chains';
 
 describe('parseSearchInput', () => {
   const evmAddress = '0x1111111111111111111111111111111111111111';
@@ -42,5 +42,18 @@ describe('parseSearchInput', () => {
 
   it.each(['', '   \n\t'])('returns null for empty input %j', (input) => {
     expect(parseSearchInput(input, 'ETH')).toBeNull();
+  });
+});
+
+describe('provider explorer links', () => {
+  it('uses the Ethereum Blockscout explorer for transactions', () => {
+    expect(getExplorerUrl('ETH', 'tx', '0xabc')).toBe('https://eth.blockscout.com/tx/0xabc');
+  });
+  it('uses TronScan hash routes and its transaction path', () => {
+    expect(getExplorerUrl('TRON', 'tx', 'abc')).toBe('https://tronscan.org/#/transaction/abc');
+    expect(getExplorerUrl('TRON', 'address', 'TExample')).toBe('https://tronscan.org/#/address/TExample');
+  });
+  it('does not create a link to an unknown chain', () => {
+    expect(getExplorerUrl('unknown', 'address', 'x')).toBeUndefined();
   });
 });

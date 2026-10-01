@@ -1,5 +1,6 @@
 import { fetchAddressTransactions } from '../api/oklink/endpoints';
 import { fetchAddressEntityLabel } from '../api/oklink/entity';
+import { OklinkApiError, shouldRetryQuery } from '../api/oklink/client';
 import type { TxItem } from '../api/oklink/schemas';
 import { aggregateCounterparties, canonicalIdentity, fetchTokenMetaMap } from './engine';
 import { isExchangeTag } from '../utils/exchangeTag';
@@ -40,6 +41,8 @@ export interface HuntHit {
 export interface HuntSnapshot {
   version: number;
   running: boolean;
+  status: HuntRunRow['status'] | null;
+  failedRequests: number;
   seed: string | null;
   chain: string | null;
   /** 当前运行的搜索记录 id（IndexedDB runs 主键），null = 未开始 */
@@ -84,11 +87,18 @@ export const DEFAULT_HUNT_OPTIONS: HuntOptions = {
   tokenFilter: [],
 };
 
-/** 标签检查的并发度（SSR 页面抓取不走 OKLink API 限流队列） */
+/** 标签检查的任务并发度；OKLink 网页查询在服务端串行，防止共用输入框串用结果。 */
 const TAG_CONCURRENCY = 4;
 const PAGE_SIZE = 50;
 /** 每处理多少个钱包同步一次 run 统计到数据库 */
 const RUN_FLUSH_INTERVAL = 20;
+const RETRY_DELAY_MS = 250;
+
+type HuntEndReason = Exclude<HuntRunRow['status'], 'running' | 'failed' | 'partial'>;
+
+function errorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)) || '未知错误';
+}
 
 interface FrontierNode {
   address: string;
@@ -99,6 +109,8 @@ export class ExchangeHuntEngine {
   private chain: string | null = null;
   private runId: string | null = null;
   private running = false;
+  private status: HuntRunRow['status'] | null = null;
+  private failedRequests = 0;
   private stopRequested = false;
   private startedAt = Date.now();
   private depth = 0;
@@ -134,6 +146,8 @@ export class ExchangeHuntEngine {
     return {
       version: this.version,
       running: this.running,
+      status: this.status,
+      failedRequests: this.failedRequests,
       seed: this.seed,
       chain: this.chain,
       runId: this.runId,
@@ -159,6 +173,8 @@ export class ExchangeHuntEngine {
     this.chain = null;
     this.runId = null;
     this.running = false;
+    this.status = null;
+    this.failedRequests = 0;
     this.depth = 0;
     this.scanned = 0;
     this.tagChecked = 0;
@@ -181,16 +197,30 @@ export class ExchangeHuntEngine {
     this.runId = crypto.randomUUID();
     this.startedAt = Date.now();
     this.running = true;
-
-    await saveHuntRun(this.buildRunRow('running', null));
+    this.status = 'running';
     this.emit();
 
     try {
-      await this.run(chain, seed, opts);
+      await this.flushRunRow();
+      this.status = await this.run(chain, seed, opts);
+      if (this.failedRequests > 0) {
+        if (this.status !== 'stopped') this.status = 'partial';
+        this.error = `${this.error ?? ''} ${this.failedRequests} 项查询重试后仍失败，结果不完整；可重新搜索以重试。`.trim();
+      }
+    } catch (error) {
+      this.status = 'failed';
+      this.error = errorMessage(error);
     } finally {
-      this.running = false;
       this.pending = 0;
-      await this.flushRunRow().catch(() => undefined);
+      this.finished = this.status === 'hit-target' || this.status === 'seed-is-exchange';
+      try {
+        await this.flushRunRow();
+      } catch (error) {
+        this.status = 'failed';
+        this.finished = false;
+        this.error = `${this.error ? `${this.error}；` : ''}保存搜索结果失败：${errorMessage(error)}`;
+      }
+      this.running = false;
       this.emit();
     }
   }
@@ -213,64 +243,66 @@ export class ExchangeHuntEngine {
       hitCount: this.hitCount,
       firstHitDepth: this.firstHitDepth,
       error,
+      failedRequests: this.failedRequests,
     };
   }
 
   /** 把统计刷进 runs 表 */
-  private async flushRunRow(statusOverride?: HuntRunRow['status']): Promise<void> {
-    if (!this.runId) return;
-    const status =
-      statusOverride ??
-      (this.finished ? 'hit-target' : this.stopRequested ? 'stopped' : 'running');
-    await saveHuntRun(this.buildRunRow(status, this.error));
+  private async flushRunRow(): Promise<void> {
+    if (!this.runId || !this.status) return;
+    await saveHuntRun(this.buildRunRow(this.status, this.error));
   }
 
-  private async run(chain: string, seed: string, opts: HuntOptions): Promise<void> {
+  private walletCapMessage(opts: HuntOptions): string {
+    const hitInfo = this.hitCount > 0
+      ? `，累计命中 ${this.hitCount} 个交易所钱包${opts.hitLimit > 0 ? `（目标 ${opts.hitLimit}）` : ''}` : '';
+    return `已达钱包上限（${opts.maxWallets}，共检查 ${this.tagChecked} 个标签）${hitInfo}。可调大钱包上限后重试。`;
+  }
+
+  private async run(chain: string, seed: string, opts: HuntOptions): Promise<HuntEndReason> {
     // 种子自身先检查：可能本来就是交易所钱包
     this.pending = 1;
     const seedIsExchange = await this.checkAndStoreTag(seed);
-    if (this.stopRequested) return;
+    if (this.stopRequested) return 'stopped';
+    if (seedIsExchange !== null) this.tagChecked += 1;
     if (seedIsExchange) {
       this.hitCount = 1;
       this.firstHitDepth = 0;
-      this.finished = true;
       this.error = '种子地址本身就是交易所钱包。';
-      await this.flushRunRow('seed-is-exchange');
-      return;
+      return 'seed-is-exchange';
     }
-    this.tagChecked += 1;
 
     let frontier: FrontierNode[] = [{ address: seed }];
 
     // 跳数不设上限：一路逐层搜下去，直到命中目标、对手方耗尽或触达钱包上限
     for (let depth = 1; ; depth++) {
       if (this.stopRequested) {
-        await this.flushRunRow('stopped');
-        return;
+        return 'stopped';
       }
       if (this.scanned >= opts.maxWallets) {
-        const hitInfo =
-          this.hitCount > 0 ? `，累计命中 ${this.hitCount} 个交易所钱包${opts.hitLimit > 0 ? `（目标 ${opts.hitLimit}）` : ''}` : '';
-        this.error = `已达钱包上限（${opts.maxWallets}，共检查 ${this.tagChecked} 个标签）${hitInfo}。可调大钱包上限后重试。`;
-        await this.flushRunRow('wallet-cap');
-        return;
+        this.error = this.walletCapMessage(opts);
+        return 'wallet-cap';
       }
       this.depth = depth;
       this.emit();
 
       // ---- 第 1 步：展开当前层全部钱包，收集下一层 ----
       const nextFrontier: FrontierNode[] = [];
+      let layerTruncated = false;
       for (let i = 0; i < frontier.length; i++) {
         if (this.stopRequested) {
-          await this.flushRunRow('stopped');
-          return;
+          return 'stopped';
         }
-        if (this.scanned >= opts.maxWallets) break;
+        if (this.scanned >= opts.maxWallets) {
+          layerTruncated = true;
+          break;
+        }
         this.pending = frontier.length - i - 1;
 
         const neighbors = await this.expandNode(chain, frontier[i].address, depth, opts);
+        if (this.stopRequested) return 'stopped';
         this.scanned += 1;
-        if (this.scanned % RUN_FLUSH_INTERVAL === 0) await this.flushRunRow().catch(() => undefined);
+        if (this.scanned % RUN_FLUSH_INTERVAL === 0) await this.flushRunRow();
         this.emit();
 
         // 批量「不存在才写入」：已见过的钱包自动跳过，一个事务完成
@@ -297,11 +329,13 @@ export class ExchangeHuntEngine {
       frontier = nextFrontier;
 
       if (frontier.length === 0) {
+        if (layerTruncated) {
+          this.error = this.walletCapMessage(opts);
+          return 'wallet-cap';
+        }
         const hitInfo = this.hitCount > 0 ? `，累计命中 ${this.hitCount} 个交易所钱包` : '';
-        this.error = `全部对手方已搜索完毕（展开 ${this.scanned} 个钱包、检查 ${this.tagChecked} 个标签）${hitInfo}。`;
-        this.finished = this.hitCount > 0;
-        await this.flushRunRow('exhausted');
-        return;
+        this.error = `当前采样范围搜索结束（展开 ${this.scanned} 个钱包、检查 ${this.tagChecked} 个标签）${hitInfo}。`;
+        return 'exhausted';
       }
 
       // ---- 第 2 步：整层标签检查（必须扫完这一层才算结束）----
@@ -309,16 +343,13 @@ export class ExchangeHuntEngine {
       this.emit();
       await this.checkLayer(frontier);
       if (this.stopRequested) {
-        await this.flushRunRow('stopped');
-        return;
+        return 'stopped';
       }
 
       const targetMet = opts.hitLimit > 0 && this.hitCount >= opts.hitLimit;
       // 未设目标时：首个含命中的层挖完即停；设了目标：达标才停
       if ((opts.hitLimit > 0 && targetMet) || (opts.hitLimit <= 0 && this.hitCount > 0)) {
-        this.finished = true;
-        await this.flushRunRow('hit-target');
-        return;
+        return 'hit-target';
       }
       // 未达命中目标：带着已有命中继续向更深挖掘
     }
@@ -332,21 +363,25 @@ export class ExchangeHuntEngine {
     opts: HuntOptions,
   ): Promise<string[]> {
     const txs: TxItem[] = [];
-    try {
-      for (const protocol of ['transaction', 'token_20'] as const) {
-        const res = await fetchAddressTransactions(chain, address, 1, PAGE_SIZE, protocol);
+    const failures: string[] = [];
+    for (const protocol of ['transaction', 'token_20'] as const) {
+      if (this.stopRequested) return [];
+      try {
+        const res = await this.requestWithRetry(() => fetchAddressTransactions(chain, address, 1, PAGE_SIZE, protocol));
         txs.push(...res.transactions);
+      } catch (error) {
+        if (this.stopRequested) return [];
+        failures.push(`${protocol}: ${errorMessage(error)}`);
       }
-    } catch (err) {
-      // 单个钱包失败不中断整体搜索，记录原因供 UI 提示
-      this.error = err instanceof Error ? err.message : String(err);
-      return [];
     }
+    if (this.stopRequested) return [];
+    const expansionError = failures.length > 0 ? failures.join('；') : null;
+    if (expansionError) this.failedRequests += 1;
 
-    // 标记已展开（种子首次出现时落库）
+    // 只在两类交易均成功时标记已展开；保留失败信息和已经取得的数据。
     const row = await getHuntWallet(this.runId!, address);
     if (row) {
-      await putHuntWallet({ ...row, expanded: 1, updatedAt: Date.now() });
+      await putHuntWallet({ ...row, expanded: expansionError ? 0 : 1, expansionError, updatedAt: Date.now() });
     } else {
       await putHuntWallet({
         key: `${this.runId}|${address}`,
@@ -354,7 +389,8 @@ export class ExchangeHuntEngine {
         address,
         parent: null,
         depth,
-        expanded: 1,
+        expanded: expansionError ? 0 : 1,
+        expansionError,
         tag: null,
         isHit: 0,
         path: null,
@@ -384,20 +420,39 @@ export class ExchangeHuntEngine {
     return ranked.map((r) => r.cp);
   }
 
+  /** 短暂请求失败只重试一次；数据库写入不重试，错误由 start 统一处理。 */
+  private async requestWithRetry<T>(request: () => Promise<T>): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      if (this.stopRequested || (error instanceof OklinkApiError && !shouldRetryQuery(0, error))) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      if (this.stopRequested) throw error;
+      return request();
+    }
+  }
+
   /** 并发检查一整层的交易所标签；发现命中也继续查完该层 */
   private async checkLayer(frontier: FrontierNode[]): Promise<void> {
     let cursor = 0;
     let checkedInLayer = 0;
+    let layerFailed = false;
 
     const worker = async (): Promise<void> => {
-      while (!this.stopRequested) {
+      while (!this.stopRequested && !layerFailed) {
         const idx = cursor++;
         if (idx >= frontier.length) return;
         const node = frontier[idx];
 
-        const isHit = await this.checkAndStoreTag(node.address);
+        let isHit: boolean | null;
+        try {
+          isHit = await this.checkAndStoreTag(node.address);
+        } catch (error) {
+          layerFailed = true;
+          throw error;
+        }
         checkedInLayer += 1;
-        this.tagChecked += 1;
+        if (isHit !== null) this.tagChecked += 1;
         this.pending = Math.max(0, frontier.length - checkedInLayer);
 
         if (isHit && !this.stopRequested) {
@@ -408,17 +463,25 @@ export class ExchangeHuntEngine {
       }
     };
 
-    await Promise.all(Array.from({ length: Math.min(TAG_CONCURRENCY, frontier.length) }, () => worker()));
+    // 等待已发出的工作全部收尾，避免失败终态保存后还有后台工作改写计数/数据库。
+    const results = await Promise.allSettled(Array.from({ length: Math.min(TAG_CONCURRENCY, frontier.length) }, () => worker()));
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
+    }
   }
 
-  /** 查标签并写回钱包行；仅交易所标签返回 true（KOL/ENS/项目方等实体标签不算） */
-  private async checkAndStoreTag(address: string): Promise<boolean> {
+  /** true = 交易所，false = 成功但不是交易所，null = 查询失败或停止，仍未确认。 */
+  private async checkAndStoreTag(address: string): Promise<boolean | null> {
     let label: string | null = null;
+    let tagError: string | null = null;
     try {
-      label = await fetchAddressEntityLabel(this.chain ?? '', address);
-    } catch {
-      label = null;
+      label = await this.requestWithRetry(() => fetchAddressEntityLabel(this.chain ?? '', address));
+    } catch (error) {
+      if (this.stopRequested) return null;
+      tagError = errorMessage(error);
+      this.failedRequests += 1;
     }
+    if (this.stopRequested) return null;
     const isHit = isExchangeTag(label);
 
     const existing = await getHuntWallet(this.runId!, address);
@@ -437,7 +500,8 @@ export class ExchangeHuntEngine {
 
     const finalRow: HuntWalletRow = {
       ...row,
-      tag: label ?? '',
+      tag: tagError ? null : label ?? '',
+      tagError,
       isHit: isHit ? 1 : 0,
       updatedAt: Date.now(),
     };
@@ -446,6 +510,6 @@ export class ExchangeHuntEngine {
       finalRow.path = await getHuntWalletPath(this.runId!, address);
     }
     await putHuntWallet(finalRow);
-    return isHit;
+    return tagError ? null : isHit;
   }
 }

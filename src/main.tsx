@@ -6,6 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 import App from './App';
+import { shouldRetryQuery } from './api/oklink/client';
 import './index.css';
 
 dayjs.locale('zh-cn');
@@ -13,7 +14,7 @@ dayjs.locale('zh-cn');
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: shouldRetryQuery,
       staleTime: 60_000,
       refetchOnWindowFocus: false,
     },

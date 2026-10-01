@@ -22,7 +22,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import type { TraceOptions } from '../../trace/engine';
 import type { TransferEdge } from '../../trace/graph';
 import { useTraceEngine } from '../../trace/useTraceEngine';
-import { getChain } from '../../api/oklink/chains';
+import { getChain, getExplorerUrl } from '../../api/oklink/chains';
 import { copyText, formatAmount, formatTime, formatUsd, shortAddress } from '../../utils/format';
 import TraceControls from './TraceControls';
 
@@ -143,7 +143,7 @@ function FlowGraphInner({ chain, address }: { chain: string; address: string }) 
           type="info"
           icon={<Spin size="small" />}
           showIcon
-          message={`正在溯源：已展开 ${snapshot.done} 个地址，队列剩余 ${snapshot.queued} 个（受 API 限流影响，速度约 2 地址/秒）`}
+          message={`正在溯源：已展开 ${snapshot.done} 个地址，队列剩余 ${snapshot.queued} 个（速度取决于数据源的响应与限流）`}
         />
       )}
       {snapshot.error && (
@@ -226,10 +226,10 @@ function FlowGraphInner({ chain, address }: { chain: string; address: string }) 
               {chainInfo && (
                 <Button
                   icon={<LinkOutlined />}
-                  href={`${chainInfo.explorerBase}/address/${selectedNode.address}`}
+                  href={getExplorerUrl(chain, 'address', selectedNode.address)}
                   target="_blank"
                 >
-                  OKLink 查看
+                  在 {chainInfo.explorerName} 查看
                 </Button>
               )}
               <Button

@@ -14,6 +14,7 @@ const EXCHANGE_KEYWORDS = [
   'htx',
   'upbit',
   'bithumb',
+  'bittrex',
   'coinbase',
   'kraken',
   'bitfinex',

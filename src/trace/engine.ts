@@ -224,7 +224,7 @@ export class TraceEngine {
     const chain = this.chain ?? 'ETH';
     const protocols = TRACE_PROTOCOLS.filter((p) => txListSupported(chain, p));
     if (protocols.length === 0) {
-      this.error = '当前链的网页端接口暂不支持交易列表抓取（Tron 转账列表受 OKLink 签名网关保护），无法溯源。';
+      this.error = '当前链暂未接入交易数据源，无法溯源。请选择已支持的链。';
       return;
     }
     const observations = new Map<string, TxItem>();

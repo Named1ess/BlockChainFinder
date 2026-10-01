@@ -4,8 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Skeleton, Space, Statistic, Tag, Tabs, Typography } from 'antd';
 import { CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import { fetchAddressAsset } from '../api/oklink/endpoints';
-import { fetchAddressEntityLabel } from '../api/oklink/entity';
-import { getChain } from '../api/oklink/chains';
+import { fetchAddressEntityLabel, getEntityLabelSource } from '../api/oklink/entity';
+import { getChain, getExplorerUrl } from '../api/oklink/chains';
 import { copyText, formatAmount, formatTime, formatUsd } from '../utils/format';
 import { exchangeTagColor } from '../utils/exchangeTag';
 import { useTraceEngine } from '../trace/useTraceEngine';
@@ -20,6 +20,7 @@ const { Text } = Typography;
 export default function AddressPage() {
   const { chain = 'ETH', address = '' } = useParams();
   const chainInfo = getChain(chain);
+  const chainSupported = Boolean(chainInfo?.dataSource) && (!__APP_MOCK__ || chain === 'ETH' || chain === 'POLYGON');
   const { engine } = useTraceEngine();
   const { message } = App.useApp();
 
@@ -31,17 +32,19 @@ export default function AddressPage() {
   const assetQuery = useQuery({
     queryKey: ['asset', chain, address],
     queryFn: () => fetchAddressAsset(chain, address),
+    enabled: chainSupported,
   });
 
-  // 交易所实体标签（SSR 抓取）：如「Binance. DepositAndWithdraw_10」「Gate.io. Hot wallet」
+  // 公开地址标签覆盖有限；未返回标签不代表地址不属于交易所。
   const tagQuery = useQuery({
-    queryKey: ['entity-tag', chain, address],
+    queryKey: ['entity-tag', getEntityLabelSource(chain), chain, address],
     queryFn: () => fetchAddressEntityLabel(chain, address),
     staleTime: 30 * 60 * 1000,
+    enabled: chainSupported,
   });
 
-  const asset = assetQuery.data;
-  const entityTag = tagQuery.data ?? null;
+  const asset = chainSupported ? assetQuery.data : undefined;
+  const entityTag = chainSupported ? tagQuery.data ?? null : null;
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -69,16 +72,42 @@ export default function AddressPage() {
               <Button
                 size="small"
                 icon={<LinkOutlined />}
-                href={`${chainInfo.explorerBase}/address/${address}`}
+                href={getExplorerUrl(chain, 'address', address)}
                 target="_blank"
               >
-                在 OKLink 查看
+                在 {chainInfo.explorerName} 查看
               </Button>
             )}
           </Space>
 
-          {assetQuery.isPending && <Skeleton.Input active style={{ width: 480 }} />}
-          {assetQuery.isError && (
+          {!chainSupported && (
+            <Alert
+              type="warning"
+              showIcon
+              message={__APP_MOCK__ ? '离线演示目前仅支持 Ethereum / Polygon' : `${chainInfo?.name ?? chain} 暂未接入可用的数据源`}
+              description={chainInfo
+                ? '暂不支持应用内地址查询与资金溯源，可通过上方区块浏览器查看链上信息。'
+                : '请在搜索框中选择已接入的链。'}
+            />
+          )}
+          {chainSupported && (
+            <Text type="secondary">标签来源：{getEntityLabelSource(chain)}{tagQuery.isFetching ? ' · 查询中…' : ''}。公开标签覆盖有限；未查询到标签不代表该地址不属于交易所。</Text>
+          )}
+          {chainSupported && tagQuery.isError && (
+            <Alert
+              type="warning"
+              showIcon
+              message="地址标签查询失败，暂时无法判断交易所归属"
+              description={String(tagQuery.error)}
+              action={(
+                <Button size="small" loading={tagQuery.isFetching} onClick={() => { void tagQuery.refetch(); }}>
+                  重试
+                </Button>
+              )}
+            />
+          )}
+          {chainSupported && assetQuery.isPending && <Skeleton.Input active style={{ width: 480 }} />}
+          {chainSupported && assetQuery.isError && (
             <Alert
               type="error"
               showIcon
@@ -97,20 +126,28 @@ export default function AddressPage() {
               <Statistic title="最近交易" value={formatTime(asset.lastTransactionTime)} />
             </Space>
           )}
+          {asset?.dataSource && (
+            <Text type="secondary">数据来源：{asset.dataSource}</Text>
+          )}
+          {!!asset?.warnings?.length && (
+            <Alert type="warning" showIcon message="地址信息不完整" description={asset.warnings.join('；')} />
+          )}
         </Space>
       </Card>
 
-      <Card variant="borderless">
-        <Tabs
-          defaultActiveKey="trace"
-          items={[
-            { key: 'trace', label: '资金溯源', children: <FlowGraph chain={chain} address={address} /> },
-            { key: 'hunt', label: '盒武器搜索', children: <ExchangeHuntPanel chain={chain} address={address} /> },
-            { key: 'txs', label: '交易记录', children: <TxTable chain={chain} address={address} /> },
-            { key: 'tokens', label: '代币持仓', children: <TokenHoldingsTable chain={chain} address={address} /> },
-          ]}
-        />
-      </Card>
+      {chainSupported && (
+        <Card variant="borderless">
+          <Tabs
+            defaultActiveKey="trace"
+            items={[
+              { key: 'trace', label: '资金溯源', children: <FlowGraph chain={chain} address={address} /> },
+              { key: 'hunt', label: '盒武器搜索', children: <ExchangeHuntPanel chain={chain} address={address} /> },
+              { key: 'txs', label: '交易记录', children: <TxTable chain={chain} address={address} /> },
+              { key: 'tokens', label: '代币持仓', children: <TokenHoldingsTable chain={chain} address={address} /> },
+            ]}
+          />
+        </Card>
+      )}
     </Space>
   );
 }

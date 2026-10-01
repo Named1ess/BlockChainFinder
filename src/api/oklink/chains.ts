@@ -1,15 +1,13 @@
 export interface ChainInfo {
-  /** OKLink 的 chainShortName */
+  /** 应用内部链标识 */
   key: string;
-  /** 网页端接口路径中的链 slug（小写） */
-  apiSlug: string;
-  /** OKLink 站点页面 URL 中的链路径（SSR 实体标签抓取用） */
-  siteSlug: string;
   /** 链家族：evm 走 EVM 端点族，tron 走波场专用端点族 */
   kind: 'evm' | 'tron';
   name: string;
   nativeSymbol: string;
-  /** OKLink 网页端前缀，用于跳转 */
+  dataSource: 'Blockscout' | 'TronScan' | null;
+  explorerName: string;
+  /** 对应区块浏览器的页面前缀 */
   explorerBase: string;
   /** 地址正则（用于搜索框识别输入类型） */
   addressPattern: RegExp;
@@ -20,45 +18,45 @@ export interface ChainInfo {
 export const CHAINS: ChainInfo[] = [
   {
     key: 'ETH',
-    apiSlug: 'eth',
-    siteSlug: 'ethereum',
     kind: 'evm',
     name: 'Ethereum',
     nativeSymbol: 'ETH',
-    explorerBase: 'https://www.oklink.com/eth',
+    dataSource: 'Blockscout',
+    explorerName: 'Blockscout',
+    explorerBase: 'https://eth.blockscout.com',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
     commonTokens: ['ETH', 'USDT', 'USDC', 'WBTC', 'DAI'],
   },
   {
     key: 'BSC',
-    apiSlug: 'bsc',
-    siteSlug: 'bsc',
     kind: 'evm',
     name: 'BNB Chain',
     nativeSymbol: 'BNB',
-    explorerBase: 'https://www.oklink.com/bsc',
+    dataSource: null,
+    explorerName: 'BscScan',
+    explorerBase: 'https://bscscan.com',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
     commonTokens: ['BNB', 'USDT', 'USDC', 'CAKE'],
   },
   {
     key: 'POLYGON',
-    apiSlug: 'polygon',
-    siteSlug: 'polygon',
     kind: 'evm',
     name: 'Polygon',
     nativeSymbol: 'POL',
-    explorerBase: 'https://www.oklink.com/polygon',
+    dataSource: 'Blockscout',
+    explorerName: 'Blockscout',
+    explorerBase: 'https://polygon.blockscout.com',
     addressPattern: /^0x[a-fA-F0-9]{40}$/,
     commonTokens: ['POL', 'MATIC', 'USDT', 'USDC'],
   },
   {
     key: 'TRON',
-    apiSlug: 'tron',
-    siteSlug: 'tron',
     kind: 'tron',
     name: 'Tron',
     nativeSymbol: 'TRX',
-    explorerBase: 'https://www.oklink.com/trx',
+    dataSource: 'TronScan',
+    explorerName: 'TronScan',
+    explorerBase: 'https://tronscan.org/#',
     addressPattern: /^T[1-9A-HJ-NP-Za-km-z]{33}$/,
     commonTokens: ['TRX', 'USDT', 'USDC'],
   },
@@ -66,6 +64,13 @@ export const CHAINS: ChainInfo[] = [
 
 export function getChain(key: string): ChainInfo | undefined {
   return CHAINS.find((c) => c.key === key);
+}
+
+export function getExplorerUrl(chain: string, kind: 'address' | 'tx', value: string): string | undefined {
+  const info = getChain(chain);
+  if (!info) return undefined;
+  const path = info.kind === 'tron' && kind === 'tx' ? 'transaction' : kind;
+  return `${info.explorerBase}/${path}/${encodeURIComponent(value)}`;
 }
 
 const TX_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
